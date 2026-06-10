@@ -13,9 +13,12 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 
 COPY . .
 # .git is excluded from the build context, so git describe cannot run here.
-# The release workflow passes the tag via APP_VERSION; resolveAppVersion reads it.
+# The release workflow passes the tag via APP_VERSION and the commit SHA via
+# APP_COMMIT; resolveAppVersion/resolveAppCommit read them.
 ARG APP_VERSION=dev
 ENV ZPAN_APP_VERSION=${APP_VERSION}
+ARG APP_COMMIT=
+ENV ZPAN_APP_COMMIT=${APP_COMMIT}
 RUN pnpm build:node \
  && pnpm prune --prod --ignore-scripts
 
@@ -81,6 +84,9 @@ USER zpan
 ENV NODE_ENV=production
 ENV HOME=/home/zpan
 ENV PORT=8222
+# Lets the app report its deployment platform as "docker" (Cloud Run overrides
+# this via K_SERVICE, which entry-node checks first).
+ENV ZPAN_RUNTIME=docker
 EXPOSE 8222
 
 ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]

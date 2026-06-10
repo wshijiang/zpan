@@ -1,13 +1,15 @@
+import { existsSync } from 'node:fs'
 import { release as osRelease } from 'node:os'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
-import { resolveAppVersion } from '../scripts/app-version.mjs'
+import { resolveAppCommit, resolveAppVersion } from '../scripts/app-version.mjs'
 import { ZPAN_CLOUD_URL_DEFAULT } from '../shared/constants'
 import { createBootstrap } from './bootstrap'
-import { buildCloudInstanceInfo } from './licensing/instance-info'
+import { buildCloudInstanceInfo, runtimeInfo } from './licensing/instance-info'
 import { createLibsqlPlatform } from './platform/libsql'
 import { createNodePlatform } from './platform/node'
+import { type DeployPlatform, setDeployPlatform } from './runtime-platform'
 import { syncPendingCloudTrafficReports } from './services/cloud-traffic-metering'
 import { resetExpiredTrafficQuotas } from './services/effective-quota'
 import { INSTANCE_TELEMETRY_CRON, reportInstanceTelemetry } from './services/instance-telemetry'
@@ -20,6 +22,7 @@ const TRAFFIC_SYNC_INTERVAL_MS = 10 * 60 * 1000 // 10 minutes
 const INSTANCE_TELEMETRY_INTERVAL_MS = 12 * 60 * 60 * 1000 // 12 hours
 const QUOTA_RESET_INTERVAL_MS = 24 * 60 * 60 * 1000 // daily; idempotent, resets only stale periods
 const appVersionGlobalKey = '__ZPAN_APP_VERSION__'
+const appCommitGlobalKey = '__ZPAN_APP_COMMIT__'
 
 // tsx runs this entry directly (dev + E2E) without the tsup build-time define,
 // so resolve the version at runtime. In the built output the define inlines the
@@ -29,6 +32,19 @@ const appVersionGlobalKey = '__ZPAN_APP_VERSION__'
 if (!globalThis.__ZPAN_APP_VERSION__) {
   globalThis[appVersionGlobalKey] = resolveAppVersion()
 }
+if (globalThis.__ZPAN_APP_COMMIT__ === undefined) {
+  globalThis[appCommitGlobalKey] = resolveAppCommit()
+}
+
+// The Node entry serves Cloud Run, Docker, and bare Node. Cloud Run sets
+// K_SERVICE; the Docker image sets ZPAN_RUNTIME=docker (falling back to the
+// /.dockerenv marker); otherwise it is plain Node.
+function detectNodePlatform(): DeployPlatform {
+  if (process.env.K_SERVICE) return 'cloud-run'
+  if (process.env.ZPAN_RUNTIME === 'docker' || existsSync('/.dockerenv')) return 'docker'
+  return 'node'
+}
+setDeployPlatform(detectNodePlatform())
 
 const platform = process.env.TURSO_DATABASE_URL
   ? await createLibsqlPlatform({
@@ -67,11 +83,7 @@ setInterval(() => {
     const instance = instanceUrl
       ? await buildCloudInstanceInfo(platform.db, {
           url: instanceUrl,
-          runtime: {
-            runtime: { provider: 'node', target: 'node/docker' },
-            server: { os: { platform: process.platform, arch: process.arch, release: osRelease() } },
-            node: { version: process.version },
-          },
+          runtime: runtimeInfo(platform),
         })
       : undefined
     await runLicensingRefresh(platform.db, cloudBaseUrl, instance)
@@ -97,8 +109,8 @@ function reportNodeInstanceTelemetry(): void {
         cron: INSTANCE_TELEMETRY_CRON,
         trigger: 'runtime',
         runtime: {
-          target: 'node/docker',
-          provider: 'node',
+          runtime: 'node',
+          platform: detectNodePlatform(),
           osPlatform: process.platform,
           osArch: process.arch,
           osRelease: osRelease(),

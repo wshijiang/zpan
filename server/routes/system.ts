@@ -10,14 +10,17 @@ import {
   CAPTCHA_PUBLIC_KEYS,
 } from '../../shared/captcha'
 import { SignupMode } from '../../shared/constants'
+import { compareSemver } from '../../shared/semver'
 import { systemOptions } from '../db/schema'
 import { hasFeature, loadBindingState } from '../licensing/has-feature'
-import { buildCloudInstanceInfo, runtimeInfo } from '../licensing/instance-info'
+import { buildInstanceInfo, runtimeInfo } from '../licensing/instance-info'
 import { requireAdmin } from '../middleware/auth'
 import type { Env } from '../middleware/platform'
 import { recordActivity } from '../services/activity'
 import { loadCaptchaOptionValues, readCaptchaConfig } from '../services/captcha'
+import { fetchChangelog } from '../services/changelog'
 import { getSitePublicOrigin, originFromRequestUrl } from '../services/site-public-origin'
+import { getAppVersion } from '../version'
 
 const setOptionSchema = z.object({
   value: z.string(),
@@ -29,8 +32,15 @@ const app = new Hono<Env>()
     const platform = c.get('platform')
     const db = platform.db
     const origin = (await getSitePublicOrigin(db)) ?? originFromRequestUrl(c.req.url) ?? new URL(c.req.url).origin
-    const info = await buildCloudInstanceInfo(db, { url: origin, runtime: runtimeInfo(platform) })
+    const info = await buildInstanceInfo(db, { url: origin, runtime: runtimeInfo(platform) })
     return c.json(info)
+  })
+  .get('/changelog', requireAdmin, zValidator('query', z.object({ refresh: z.string().optional() })), async (c) => {
+    const force = c.req.valid('query').refresh === 'true'
+    const { latestVersion, markdown } = await fetchChangelog(Date.now(), { force })
+    const currentVersion = getAppVersion()
+    const updateAvailable = latestVersion ? compareSemver(latestVersion, currentVersion) > 0 : false
+    return c.json({ currentVersion, latestVersion, updateAvailable, markdown })
   })
   .get('/options', async (c) => {
     const db = c.get('platform').db
