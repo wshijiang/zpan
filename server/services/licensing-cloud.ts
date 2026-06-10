@@ -38,11 +38,21 @@ export interface LicenseAccountInfo {
   email?: string | null
 }
 
+// The payload ZPan Cloud expects for pairing/refresh. Its `runtime` shape is
+// fixed by zpan-cloud-sdk and is intentionally decoupled from the richer
+// InstanceInfo the About page consumes (which has flat runtime + platform).
 export interface CloudInstanceInfo {
   id: string
   name: string
   url: string
   version: string
+  commit?: string | null
+  runtime?: {
+    provider: 'cloudflare' | 'node'
+    target: 'cloudflare-worker' | 'node/docker'
+  } | null
+  server?: { os?: { platform?: string | null; arch?: string | null; release?: string | null } | null } | null
+  node?: { version?: string | null } | null
 }
 
 export class CloudInvalidResponseError extends Error {

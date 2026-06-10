@@ -33,6 +33,7 @@ import type {
   BrandingThemeMode,
   BrandingThemePresetId,
   BrandingThemeValues,
+  ChangelogInfo,
   CloudOrder,
   CloudProduct,
   CloudStoreTarget,
@@ -40,6 +41,7 @@ import type {
   DownloadTask,
   IhostConfigResponse,
   ImageHosting,
+  InstanceInfo,
   Notification,
   ObjectUploadSession,
   OrgQuota,
@@ -433,6 +435,22 @@ export function grantUserEntitlement(
 ) {
   return unwrap<{ orgId: string; entitlement: OrgQuotaEntitlement }>(
     users[':id'].entitlements.$post({ param: { id: userId }, json: data }),
+  )
+}
+
+export function updateUserEntitlement(
+  userId: string,
+  entitlementId: string,
+  data: { bytes?: number; expiresAt?: string | null; note?: string | null },
+) {
+  return unwrap<{ orgId: string; entitlement: OrgQuotaEntitlement }>(
+    users[':id'].entitlements[':eid'].$patch({ param: { id: userId, eid: entitlementId }, json: data }),
+  )
+}
+
+export function revokeUserEntitlement(userId: string, entitlementId: string) {
+  return unwrap<{ orgId: string; entitlement: OrgQuotaEntitlement }>(
+    users[':id'].entitlements[':eid'].$delete({ param: { id: userId, eid: entitlementId } }),
   )
 }
 
@@ -1005,6 +1023,14 @@ export interface PairingPollResult {
 
 export function getLicensingStatus() {
   return unwrap<BindingState>(licensingApi.status.$get())
+}
+
+export function getInstanceInfo() {
+  return unwrap<InstanceInfo>(system.instance.$get())
+}
+
+export function getChangelog(opts?: { refresh?: boolean }) {
+  return unwrap<ChangelogInfo>(system.changelog.$get({ query: opts?.refresh ? { refresh: 'true' } : {} }))
 }
 
 export function connectCloud() {
