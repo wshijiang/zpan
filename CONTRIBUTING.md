@@ -38,7 +38,7 @@ pnpm e2e              # Playwright E2E tests
 3. **Run checks** — `pnpm lint && pnpm typecheck && pnpm test && pnpm test:cf`
 4. **Coverage** — new code must maintain 90%+ line coverage on `server/`
 5. **Commit** — use [Conventional Commits](https://www.conventionalcommits.org) (`feat:`, `fix:`, `docs:`, etc.)
-6. **PR** — target the `master` branch
+6. **PR** — target the `main` branch
 7. **Preview verification** — every PR must be verified in the preview environment (see below)
 
 ## Preview Verification
@@ -60,7 +60,7 @@ A code-review-only approval (reading the diff without visiting the preview) is *
 - A dev storage backend is pre-configured, so file upload works out of the box
 - If you need a clean state, coordinate with maintainers
 
-### Staging test account
+### Staging test accounts
 
 A shared test account is available on the staging database for preview verification:
 
@@ -71,7 +71,25 @@ A shared test account is available on the staging database for preview verificat
 
 Use this account for UI regression testing in preview deployments. **Do not change the password** — other contributors depend on it.
 
-For admin feature testing, read admin credentials from the local `.dev.vars` file (`DEV_ADMIN_PASSWORD`). The admin email is `admin@zpan.space`.
+For admin feature testing, use the dedicated non-production preview admin account:
+
+| Field | Value |
+|-------|-------|
+| Email | `admin@zpan.space` |
+| Password | Private maintainer `DEV_ADMIN_PASSWORD` value |
+
+Use this account only in the staging/preview environment. **Do not commit, post, or use the password for production.**
+
+If the staging admin account is missing, demoted, or the password stops working, a maintainer can repair it without touching production:
+
+```sh
+pnpm seed:preview-admin
+```
+
+The command reads `DEV_ADMIN_PASSWORD` from the shell environment or the gitignored local `.dev.vars` file, then targets
+`zpan-db-staging` with `--env staging --remote` and upserts only `admin@zpan.space`.
+To rotate the shared preview password intentionally, run the same command with the new non-production
+`DEV_ADMIN_PASSWORD` value and update the private maintainer credential source in the same change.
 
 ## Database Migrations
 
@@ -92,6 +110,35 @@ pnpm db:reset:d1             # Reset D1 local database (.wrangler)
 ```
 
 Migration files live in `migrations/` at project root. Always commit them.
+
+### Storage usage backfill
+
+After applying the migration that creates `storage_usage_breakdowns`, run the storage usage backfill once. The command is a dry run unless `--apply` is present.
+
+```sh
+pnpm storage:backfill -- --d1 zpan-db --remote
+pnpm storage:backfill -- --d1 zpan-db --remote --apply
+
+pnpm storage:backfill -- --sqlite zpan.db
+pnpm storage:backfill -- --sqlite zpan.db --apply
+```
+
+The backfill recalculates all eight storage categories from `matters` and `image_hostings`. It is an operator command, not part of the application runtime or deployment lifecycle.
+
+### Storage enabled/status backfill
+
+After applying migrations 0066 through 0069, convert legacy storage status values into
+the `enabled` flag and the `unknown`/`healthy`/`unhealthy` health model:
+
+```sh
+pnpm storage-status:backfill -- --d1 zpan-db --remote
+pnpm storage-status:backfill -- --d1 zpan-db --remote --apply
+
+pnpm storage-status:backfill -- --sqlite zpan.db
+pnpm storage-status:backfill -- --sqlite zpan.db --apply
+```
+
+Run this once before deploying the application version that reads health status.
 
 ### Turso (libSQL) migrate path
 

@@ -86,13 +86,13 @@ function LinkInviteTab({ orgId }: { orgId: string }) {
 
   const mutation = useMutation({
     mutationFn: async () => {
-      const res = await teamsApi[':teamId']['invite-link'].$post({
+      const res = await teamsApi[':teamId']['invite-links'].$post({
         param: { teamId: orgId },
         json: { role },
       })
       if (!res.ok) {
         const body = await res.json()
-        throw new Error((body as { error?: string }).error ?? 'Failed to generate link')
+        throw new Error((body as { error?: { message?: string } }).error?.message ?? 'Failed to generate link')
       }
       return res.json()
     },
@@ -163,7 +163,7 @@ function PendingInvitations({ orgId }: { orgId: string }) {
       const res = await teamsApi[':teamId'].invitations.$get({ param: { teamId: orgId } })
       if (!res.ok) throw new Error('Failed to load invitations')
       const body = await res.json()
-      return (body as { invitations: PendingInvitation[] }).invitations
+      return (body as { items: PendingInvitation[] }).items
     },
   })
 

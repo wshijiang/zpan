@@ -18,7 +18,7 @@
   <a href="https://github.com/saltbo/zpan/actions/workflows/release.yml"><img src="https://github.com/saltbo/zpan/actions/workflows/release.yml/badge.svg" alt="Release" /></a>
   <a href="https://github.com/saltbo/zpan/releases/latest"><img src="https://img.shields.io/github/v/release/saltbo/zpan" alt="GitHub Release" /></a>
   <a href="https://ghcr.io/saltbo/zpan"><img src="https://img.shields.io/badge/ghcr.io-saltbo%2Fzpan-blue" alt="Docker Image" /></a>
-  <a href="https://github.com/saltbo/zpan/blob/master/LICENSE"><img src="https://img.shields.io/github/license/saltbo/zpan.svg" alt="License" /></a>
+  <a href="https://github.com/saltbo/zpan/blob/main/LICENSE"><img src="https://img.shields.io/github/license/saltbo/zpan.svg" alt="License" /></a>
 </p>
 
 <p align="center">
@@ -42,7 +42,7 @@ ZPan 是一个构建在 S3-compatible 存储之上的轻量级文件托管平台
 - **S3 网盘** — 在你自己的对象存储之上管理文件、文件夹、预览、回收站、配额和团队工作区
 - **图床** — 通过 PicGo、PicList、uPic、ShareX、Flameshot 或 API 上传，即刻获得稳定的 URL
 - **文件分享** — 发布带密码、过期时间、下载次数限制、直链以及转存到网盘的分享链接
-- **个人主页** — 为每个用户提供一个公开的 `/u/username` 页面，用于精选分享文件和文件夹式浏览
+- **个人主页** — 为每个用户提供一个公开的 `/u/username` 页面，用于展示公开分享和文件夹式浏览
 - **外部访问** — 通过 WebDAV 挂载文件，并运行下载节点以支持远程下载工作流
 
 ## 为什么选择 ZPan？
@@ -113,6 +113,8 @@ ZPan 并不打算成为：
 
 完成初始设置后，每次你将 fork 与最新版本同步时，该工作流都会自动运行。
 
+WebDAV 独立域名：先在管理后台启用 WebDAV，并按需配置自定义域名，再为 API Token 增加 **Transform Rules:Edit** 权限。域名留空时，若主站 Worker Custom Domain 为 `files.example.com`，部署流程会自动绑定并验证 `dav.files.example.com`，管理根路径到 `/dav` 的 rewrite，并记录可用状态。其他部署方式可在手动配置 DNS/代理后，通过**管理后台 → 设置 → WebDAV**完成验证。验证成功前，ZPan 会继续公布原有 `/dav/` 入口。详见 [WebDAV 自定义域名](../webdav-custom-domain.md)。
+
 ### AWS Lambda
 
 通过 GitHub Actions 使用 SAM 部署。Lambda Function URL 直接提供 HTTPS，无需 API Gateway。
@@ -130,14 +132,14 @@ ZPan 并不打算成为：
 **快速开始** — 拉取预构建镜像并自带 S3 存储：
 
 ```bash
-curl -O https://raw.githubusercontent.com/saltbo/zpan/master/deploy/docker-compose.yml
+curl -O https://raw.githubusercontent.com/saltbo/zpan/main/deploy/docker-compose.yml
 docker compose up -d
 ```
 
 **搭配 RustFS**（自托管的 S3-compatible 存储，无外部依赖）：
 
 ```bash
-curl -O https://raw.githubusercontent.com/saltbo/zpan/master/deploy/docker-compose.rustfs.yml
+curl -O https://raw.githubusercontent.com/saltbo/zpan/main/deploy/docker-compose.rustfs.yml
 docker compose -f docker-compose.rustfs.yml up -d
 ```
 

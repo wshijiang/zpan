@@ -39,7 +39,7 @@ export function SaveToDriveDialog({ open, onOpenChange, token, onPasswordRequire
 
   const foldersQuery = useQuery({
     queryKey: ['folders-for-save', selectedOrgId],
-    queryFn: () => listObjectsByPath('', 'active', 1, 200, { type: 'folder' }),
+    queryFn: () => listObjectsByPath('', undefined, 100, { type: 'folder', orgId: selectedOrgId }),
     enabled: !!selectedOrgId,
   })
 
@@ -57,7 +57,7 @@ export function SaveToDriveDialog({ open, onOpenChange, token, onPasswordRequire
       onOpenChange(false)
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.status === 400 && err.body.code === 'QUOTA_EXCEEDED') {
+        if (err.status === 400 && err.reason === 'QUOTA_EXCEEDED') {
           toast.error(t('share.quotaExceeded'))
         } else if (err.status === 401) {
           toast.error(t('share.passwordRequired'))

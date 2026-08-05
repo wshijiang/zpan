@@ -9,6 +9,7 @@ import { confirmIhostImage, createIhostImagePresign, deleteIhostImage, listIhost
 export interface IhostItem extends StorageObject {
   token: string
   url: string
+  publicUrl: string
   dimensions: string | null
   accessCount: number
 }
@@ -40,11 +41,13 @@ function toIhostItem(img: ImageHosting): IhostItem {
     object: img.storageKey,
     storageId: img.storageId,
     status: 'active' as const,
+    trashedAt: null,
     createdAt: img.createdAt,
     updatedAt: img.createdAt,
     // IhostItem extra fields
     token: img.token,
     url: `/r/${img.token}.${mimeToExt(img.mime)}`,
+    publicUrl: img.url,
     dimensions,
     accessCount: img.accessCount,
   }
@@ -76,10 +79,11 @@ async function uploadImage(file: File, ctx: UploadRunnerContext): Promise<void> 
 
 export const imageHostDataSource = {
   queryKeyPrefix: ['ihost', 'images'] as const,
+  resourceTypes: ['image_hosting'],
 
-  async list(_path: string, _opts: { filterType?: string; search?: string }) {
-    const result = await listIhostImages({ limit: 200 })
-    return { items: result.items.map(toIhostItem) }
+  async list(_path: string, opts: { filterType?: string; search?: string; pageToken?: string }) {
+    const result = await listIhostImages({ pageSize: 100, pageToken: opts.pageToken })
+    return { items: result.items.map(toIhostItem), nextPageToken: result.nextPageToken }
   },
 
   upload: uploadImage,
@@ -110,6 +114,6 @@ export const imageHostDataSource = {
 
   getShareUrl(item: StorageObject): string {
     const ihostItem = item as IhostItem
-    return ihostItem.url ?? ''
+    return ihostItem.publicUrl ?? ''
   },
 }

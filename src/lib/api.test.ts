@@ -1,14 +1,14 @@
 // Tests for src/lib/api.ts — covers all public API helper functions
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  batchDeleteUsers,
-  batchUpdateUserStatus,
+  ApiError,
+  abortObjectUpload,
   buildShareObjectUrl,
   cancelBackgroundJob,
   cancelCloudOrder,
-  cancelUpload,
+  clearSessionCache,
+  completeObjectUpload,
   confirmIhostImage,
-  confirmUpload,
   connectCloud,
   continueCloudOrderPayment,
   copyObject,
@@ -16,53 +16,72 @@ import {
   createBackgroundJob,
   createCloudBillingPortalSession,
   createCloudCheckout,
+  createDiscountQuote,
   createDownloadTask,
   createIhostApiKey,
   createIhostImagePresign,
   createObject,
-  createObjectUploadSession,
   createRemoteDownloadApiKey,
   createShare,
   createSiteInvitation,
   createStorage,
   createWebDavAppPassword,
   deleteAnnouncement,
+  deleteAuthProvider,
   deleteAvatar,
   deleteDownloader,
   deleteIhostConfig,
   deleteIhostImage,
+  deleteInviteCode,
   deleteObject,
-  deleteShare,
   deleteStorage,
   deleteTeamLogo,
-  deleteUser,
   disconnectCloud,
-  downloadTaskEventsUrl,
-  emptyTrash,
   enableIhostFeature,
+  generateInviteCodes,
+  getActiveBackgroundJobCount,
+  getAdminDashboardGrowthStats,
+  getAdminDashboardOperationsStats,
+  getAdminDashboardOverviewStats,
+  getAdminDashboardSharingStats,
+  getAdminDashboardStorageStats,
+  getAdminDashboardTrafficStats,
+  getAdminOverview,
   getAnnouncement,
   getBackgroundJob,
-  getBranding,
   getChangelog,
   getCloudCredits,
+  getDownloadTask,
   getEmailConfig,
   getIhostConfig,
+  getImageDomainProvider,
   getInstanceInfo,
+  getLicenseEntitlements,
   getLicensingStatus,
+  getOAuthConsentContext,
   getObject,
   getProfile,
   getSession,
   getShare,
+  getShareReadme,
+  getSiteConfig,
   getSiteInvitation,
+  getSiteSettings,
   getStorage,
-  getSystemOption,
+  getStorageUsage,
+  getTeam,
+  getTrashObject,
   getUnreadCount,
   getUserQuota,
+  getUserQuotaById,
+  grantOrgEntitlement,
   grantUserEntitlement,
+  isNameConflictError,
   listActiveAnnouncements,
   listAdminAnnouncements,
   listAdminAuditLogs,
   listAnnouncements,
+  listApiKeys,
   listAuthProviders,
   listBackgroundJobs,
   listCloudCreditLedgerEntries,
@@ -71,57 +90,79 @@ import {
   listCloudProducts,
   listCloudStoreTargets,
   listDownloaders,
+  listDownloadTaskEvents,
   listDownloadTasks,
-  listIhostApiKeys,
   listIhostImages,
+  listInviteCodes,
   listNotifications,
-  listObjects,
+  listOAuthGrants,
+  listObjectsByPath,
+  listOrgEntitlements,
   listQuotas,
-  listRemoteDownloadApiKeys,
+  listReceivedShares,
   listShareObjects,
   listShares,
   listSiteInvitations,
   listStorages,
-  listSystemOptions,
+  listStorageUsageItems,
+  listTeamActivities,
+  listTeams,
+  listTrash,
   listUserEntitlements,
-  listUsers,
-  listWebDavAppPasswords,
   markAllNotificationsRead,
   markNotificationRead,
-  patchObjectUploadSession,
+  patchStorage,
   pollPairing,
   presignObjectUploadParts,
+  purgeTrashObject,
   redeemCloudGiftCard,
   refreshLicense,
+  replaceStorage,
   resendSiteInvitation,
   resetBrandingField,
   restoreObject,
   retryBackgroundJob,
   revokeIhostApiKey,
+  revokeOAuthGrant,
+  revokeOrgEntitlement,
   revokeRemoteDownloadApiKey,
+  revokeShare,
   revokeSiteInvitation,
   revokeUserEntitlement,
   revokeWebDavAppPassword,
   runDownloadTaskAction,
   saveBranding,
   saveEmailConfig,
+  saveImageDomainProvider,
   saveShareToDrive,
   sendDownloaderHeartbeat,
-  setSystemOption,
+  serverEventsUrl,
+  setSharePrivacy,
+  submitOAuthConsent,
   testEmail,
-  trashObject,
+  testImageDomainProvider,
+  transferObject,
   updateAnnouncement,
   updateDownloader,
+  updateDownloaderCreditBilling,
   updateDownloadTask,
   updateIhostConfig,
   updateObject,
-  updateStorage,
+  updateOrgEntitlement,
+  updateSiteCaptcha,
+  updateSiteIdentity,
+  updateSiteQuotas,
+  updateSiteRegistration,
+  updateSiteWebDav,
+  updateStorageEgressBilling,
   updateUserEntitlement,
-  updateUserStatus,
   uploadAvatar,
+  uploadPartToS3,
   uploadTeamLogo,
   uploadToS3,
+  upsertAuthProvider,
   verifySharePassword,
+  verifySiteWebDav,
 } from './api'
 
 function makeResponse(body: unknown, ok = true, status = 200): Response {
@@ -136,44 +177,46 @@ function makeResponse(body: unknown, ok = true, status = 200): Response {
 describe('api', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn())
+    clearSessionCache()
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  describe('listObjects', () => {
+  describe('listObjectsByPath (defaults and unwrap edge cases)', () => {
     it('calls correct URL with defaults', async () => {
       const fetchMock = vi.mocked(fetch)
-      fetchMock.mockResolvedValueOnce(makeResponse({ items: [], total: 0, page: 1, pageSize: 500 }))
+      fetchMock.mockResolvedValueOnce(makeResponse({ items: [], nextPageToken: null }))
 
-      await listObjects('root')
+      await listObjectsByPath('root')
 
       const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
       expect(url).toContain('/api/objects?')
-      expect(url).toContain('parent=root')
-      expect(url).toContain('status=active')
-      expect(url).toContain('page=1')
-      expect(url).toContain('pageSize=500')
+      expect(url).toContain('path=root')
+      expect(url).toContain('pageSize=100')
     })
 
-    it('uses provided status, page, and pageSize', async () => {
+    it('uses provided page token, pageSize, and opts', async () => {
       const fetchMock = vi.mocked(fetch)
-      fetchMock.mockResolvedValueOnce(makeResponse({ items: [], total: 0, page: 2, pageSize: 20 }))
+      fetchMock.mockResolvedValueOnce(makeResponse({ items: [], nextPageToken: null }))
 
-      await listObjects('folder1', 'trashed', 2, 20)
+      await listObjectsByPath('folder1', 'page-token', 20, { type: 'image', search: 'cat', orgId: 'org-1' })
 
       const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('status=trashed')
-      expect(url).toContain('page=2')
+      expect(url).toContain('path=folder1')
+      expect(url).toContain('pageToken=page-token')
       expect(url).toContain('pageSize=20')
+      expect(url).toContain('type=image')
+      expect(url).toContain('search=cat')
+      expect(url).toContain('orgId=org-1')
     })
 
     it('returns parsed paginated response', async () => {
-      const payload = { items: [{ id: 'abc' }], total: 1, page: 1, pageSize: 500 }
+      const payload = { items: [{ id: 'abc' }], nextPageToken: null }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
-      const result = await listObjects('root')
+      const result = await listObjectsByPath('root')
 
       expect(result).toEqual(payload)
     })
@@ -181,18 +224,19 @@ describe('api', () => {
     it('throws when response is not ok', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
 
-      await expect(listObjects('root')).rejects.toThrow('forbidden')
+      await expect(listObjectsByPath('root')).rejects.toThrow('forbidden')
     })
 
-    it('falls back to statusText when error body has no error field', async () => {
+    it('falls back to HTTP status when error body has no error field', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({}, false, 500))
 
-      await expect(listObjects('root')).rejects.toThrow('Bad Request')
+      await expect(listObjectsByPath('root')).rejects.toThrow('HTTP 500')
     })
 
-    it('falls back to statusText when json parse fails', async () => {
+    it('falls back to HTTP status when json parse fails', async () => {
       const res = {
         ok: false,
+        status: 503,
         statusText: 'Service Unavailable',
         json: async () => {
           throw new Error('parse error')
@@ -200,13 +244,13 @@ describe('api', () => {
       } as unknown as Response
       vi.mocked(fetch).mockResolvedValueOnce(res)
 
-      await expect(listObjects('root')).rejects.toThrow('Service Unavailable')
+      await expect(listObjectsByPath('root')).rejects.toThrow('HTTP 503')
     })
 
     it('passes credentials: include', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], total: 0, page: 1, pageSize: 500 }))
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], nextPageToken: null }))
 
-      await listObjects('root')
+      await listObjectsByPath('root')
 
       const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
       expect(init.credentials).toBe('include')
@@ -239,7 +283,7 @@ describe('api', () => {
       await listSiteInvitations(2, 10)
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/site-invitations?')
+      expect(url).toContain('/api/site/invitations?')
       expect(url).toContain('page=2')
       expect(url).toContain('pageSize=10')
       expect(init.method).toBe('GET')
@@ -251,7 +295,7 @@ describe('api', () => {
       await createSiteInvitation('new@example.com')
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/site-invitations')
+      expect(url).toContain('/api/site/invitations')
       expect(init.method).toBe('POST')
       expect(init.body).toBe(JSON.stringify({ email: 'new@example.com' }))
     })
@@ -262,17 +306,17 @@ describe('api', () => {
       await resendSiteInvitation('invite-1')
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/admin/site-invitations/invite-1/resend')
+      expect(url).toBe('/api/site/invitations/invite-1/deliveries')
       expect(init.method).toBe('POST')
     })
 
-    it('revokes a site invitation', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ id: 'invite-1', revoked: true }))
+    it('revokes a site invitation (resolves on 204)', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
 
-      await revokeSiteInvitation('invite-1')
+      await expect(revokeSiteInvitation('invite-1')).resolves.toBeUndefined()
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/admin/site-invitations/invite-1')
+      expect(url).toBe('/api/site/invitations/invite-1')
       expect(init.method).toBe('DELETE')
     })
 
@@ -282,7 +326,7 @@ describe('api', () => {
       await getSiteInvitation('token-1')
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/site-invitations/token-1')
+      expect(url).toBe('/api/site/invitations/token-1')
       expect(init.method).toBe('GET')
     })
 
@@ -406,9 +450,41 @@ describe('api', () => {
       expect(JSON.parse(calls[2][1].body as string)).toEqual({ code: 'GIFT-123' })
       expect(calls[3][0]).toBe('/api/store/orders/order-1/payments')
       expect(calls[3][1].method).toBe('POST')
-      expect(calls[4][0]).toBe('/api/store/orders/order-1')
-      expect(calls[4][1].method).toBe('PATCH')
+      expect(calls[4][0]).toBe('/api/store/orders/order-1/status')
+      expect(calls[4][1].method).toBe('PUT')
       expect(JSON.parse(calls[4][1].body as string)).toEqual({ status: 'canceled' })
+    })
+
+    it('sends the promotion code in the checkout body when provided', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        makeResponse({ orderId: 'order-1', url: 'https://cloud.example/checkout' }),
+      )
+
+      const result = await createCloudCheckout('pkg-1', 'price-usd', 'SAVE10')
+
+      expect(result).toEqual({ orderId: 'order-1', url: 'https://cloud.example/checkout' })
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/store/checkouts')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(init.body as string)).toEqual({
+        packageId: 'pkg-1',
+        priceId: 'price-usd',
+        promotionCode: 'SAVE10',
+      })
+    })
+
+    it('creates a discount quote for a price and code', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        makeResponse({ code: 'SAVE10', currency: 'usd', subtotal: 9900, discount: 990, total: 8910 }),
+      )
+
+      const quote = await createDiscountQuote('SAVE10', 'price-usd')
+
+      expect(quote).toEqual({ code: 'SAVE10', currency: 'usd', subtotal: 9900, discount: 990, total: 8910 })
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/store/discount-quotes')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(init.body as string)).toEqual({ code: 'SAVE10', priceId: 'price-usd' })
     })
 
     it.each([
@@ -418,6 +494,7 @@ describe('api', () => {
       ['listCloudCreditLedgerEntries', () => listCloudCreditLedgerEntries()],
       ['redeemCloudGiftCard', () => redeemCloudGiftCard('GIFT-123')],
       ['createCloudCheckout', () => createCloudCheckout('pkg-1')],
+      ['createDiscountQuote', () => createDiscountQuote('SAVE10', 'price-usd')],
       ['listCloudOrders', () => listCloudOrders()],
     ])('throws ApiError for %s failures', async (_name, call) => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'quota store failed' }, false, 400))
@@ -427,8 +504,22 @@ describe('api', () => {
   })
 
   describe('createObject', () => {
-    it('posts to /api/objects with JSON body', async () => {
-      const created = { id: 'new1', name: 'doc.pdf', uploadUrl: 'https://s3/presigned' }
+    it('posts to /api/objects with JSON body and returns the draft with upload instructions', async () => {
+      const created = {
+        id: 'new1',
+        name: 'doc.pdf',
+        upload: {
+          sessionId: 'sess-1',
+          uploadId: null,
+          mode: 'single',
+          partSize: 5 * 1024 * 1024,
+          partCount: 1,
+          expiresAt: '2026-01-01T01:00:00.000Z',
+          presignedExpiresAt: '2026-01-01T00:15:00.000Z',
+          requiredHeaders: {},
+          parts: [{ partNumber: 1, url: 'https://s3/part-1', expiresAt: '2026-01-01T00:15:00.000Z', headers: {} }],
+        },
+      }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(created))
 
       const result = await createObject({
@@ -440,6 +531,7 @@ describe('api', () => {
       })
 
       expect(result).toEqual(created)
+      expect(result.upload).toEqual(created.upload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
       expect(url).toContain('/api/objects')
       expect(init.method).toBe('POST')
@@ -450,10 +542,124 @@ describe('api', () => {
       expect(headers.get('Content-Type')).toContain('application/json')
     })
 
+    it('omits an optional content type', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ id: 'new1', name: 'unknown.bin' }))
+
+      await createObject({ name: 'unknown.bin', parent: 'root', dirtype: 0 })
+
+      const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(JSON.parse(init.body as string)).toEqual({ name: 'unknown.bin', parent: 'root', dirtype: 0 })
+    })
+
+    it('includes storageId when creating a targeted object draft', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ id: 'new1', name: 'doc.pdf' }))
+
+      await createObject({
+        name: 'doc.pdf',
+        type: 'application/pdf',
+        size: 1024,
+        parent: 'root',
+        dirtype: 0,
+        storageId: 'st-1',
+      })
+
+      const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(JSON.parse(init.body as string)).toMatchObject({ storageId: 'st-1' })
+    })
+
+    it('returns a folder without upload instructions', async () => {
+      const created = { id: 'folder1', name: 'photos', type: 'folder' }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(created))
+
+      const result = await createObject({ name: 'photos', type: 'folder', parent: 'root', dirtype: 1 })
+
+      expect(result).toEqual(created)
+      expect(result.upload).toBeUndefined()
+    })
+
     it('throws on error response', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'quota exceeded' }, false, 422))
 
       await expect(createObject({ name: 'f', type: 't', parent: 'p', dirtype: 0 })).rejects.toThrow('quota exceeded')
+    })
+
+    it('throws ApiError with structured targeted-storage failures', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        makeResponse(
+          {
+            error: {
+              code: 503,
+              message: 'Storage is not active or has no available capacity',
+              status: 'UNAVAILABLE',
+              details: [{ reason: 'NO_STORAGE_CONFIGURED', domain: 'zpan.dev' }],
+            },
+          },
+          false,
+          503,
+        ),
+      )
+
+      await expect(
+        createObject({ name: 'f', type: 't', parent: 'p', dirtype: 0, storageId: 'st-full' }),
+      ).rejects.toMatchObject({
+        name: 'ApiError',
+        status: 503,
+        message: 'Storage is not active or has no available capacity',
+        reason: 'NO_STORAGE_CONFIGURED',
+      })
+    })
+  })
+
+  describe('completeObjectUpload', () => {
+    it('posts parts to /api/objects/:id/uploads/:sessionId/completions and returns the live object', async () => {
+      const live = { id: 'obj-1', name: 'doc.pdf', status: 'active' }
+      const parts = [
+        { partNumber: 1, etag: 'etag-1' },
+        { partNumber: 2, etag: 'etag-2' },
+      ]
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(live))
+
+      const result = await completeObjectUpload('obj-1', 'sess-1', parts)
+
+      expect(result).toEqual(live)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/objects/obj-1/uploads/sess-1/completions')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(init.body as string)).toEqual({ parts })
+    })
+
+    it('throws ApiError on error response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'invalid parts' }, false, 400))
+
+      await expect(completeObjectUpload('obj-1', 'sess-1', [])).rejects.toThrow('invalid parts')
+    })
+  })
+
+  describe('abortObjectUpload', () => {
+    it('sends DELETE to /api/objects/:id/uploads/:sessionId and resolves on 204', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
+
+      await expect(abortObjectUpload('obj-1', 'sess-1')).resolves.toBeUndefined()
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/objects/obj-1/uploads/sess-1?')
+      expect(init.method).toBe('DELETE')
+    })
+
+    it('passes strict cleanup query when requested', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
+
+      await abortObjectUpload('obj-1', 'sess-1', { strictStorageCleanup: true })
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/objects/obj-1/uploads/sess-1?strictStorageCleanup=1')
+      expect(init.method).toBe('DELETE')
+    })
+
+    it('throws ApiError on error response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
+
+      await expect(abortObjectUpload('obj-1', 'missing')).rejects.toThrow('not found')
     })
   })
 
@@ -468,7 +674,7 @@ describe('api', () => {
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
       expect(url).toBe('/api/objects/id1')
       expect(init.method).toBe('PATCH')
-      expect(init.body).toBe(JSON.stringify({ action: 'update', name: 'renamed.txt' }))
+      expect(init.body).toBe(JSON.stringify({ name: 'renamed.txt' }))
     })
 
     it('patches object by id with parent', async () => {
@@ -478,7 +684,7 @@ describe('api', () => {
       await updateObject('id1', { parent: 'folder2' })
 
       const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(init.body).toBe(JSON.stringify({ action: 'update', parent: 'folder2' }))
+      expect(init.body).toBe(JSON.stringify({ parent: 'folder2' }))
     })
 
     it('throws on error response', async () => {
@@ -488,58 +694,12 @@ describe('api', () => {
     })
   })
 
-  describe('confirmUpload', () => {
-    it('patches with action: confirm', async () => {
-      const obj = { id: 'id1', status: 'active' }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(obj))
-
-      const result = await confirmUpload('id1')
-
-      expect(result).toEqual(obj)
-      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/objects/id1')
-      expect(init.method).toBe('PATCH')
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ action: 'confirm' })
-    })
-
-    it('throws on error response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
-
-      await expect(confirmUpload('missing')).rejects.toThrow('not found')
-    })
-  })
-
-  describe('cancelUpload', () => {
-    it('patches with action: cancel', async () => {
-      const payload = { id: 'id1', cancelled: true }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
-
-      const result = await cancelUpload('id1')
-
-      expect(result).toEqual(payload)
-      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/objects/id1')
-      expect(init.method).toBe('PATCH')
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ action: 'cancel' })
-    })
-
-    it('throws on error response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
-
-      await expect(cancelUpload('missing')).rejects.toThrow('not found')
-    })
-  })
-
   describe('deleteObject', () => {
-    it('sends DELETE request and returns deleted flag', async () => {
-      const payload = { id: 'id1', deleted: true }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+    it('sends DELETE request (soft delete to trash) and resolves on 204', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
 
-      const result = await deleteObject('id1')
+      await expect(deleteObject('id1')).resolves.toBeUndefined()
 
-      expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
       expect(url).toBe('/api/objects/id1')
       expect(init.method).toBe('DELETE')
@@ -553,7 +713,7 @@ describe('api', () => {
   })
 
   describe('copyObject', () => {
-    it('posts to /copy endpoint with copyFrom and parent in body', async () => {
+    it('posts to /:id/copies with parent in body', async () => {
       const copy = { id: 'copy1', name: 'file.txt' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(copy))
 
@@ -561,10 +721,10 @@ describe('api', () => {
 
       expect(result).toEqual(copy)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/objects/copy')
+      expect(url).toBe('/api/objects/id1/copies')
       expect(init.method).toBe('POST')
       const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ copyFrom: 'id1', parent: 'folder2' })
+      expect(body).toMatchObject({ parent: 'folder2' })
       const headers =
         init.headers instanceof Headers ? init.headers : new Headers(init.headers as Record<string, string>)
       expect(headers.get('Content-Type')).toContain('application/json')
@@ -574,6 +734,49 @@ describe('api', () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'conflict' }, false, 409))
 
       await expect(copyObject('id1', 'folder2')).rejects.toThrow('conflict')
+    })
+  })
+
+  describe('transferObject', () => {
+    it('posts to /:id/transfers with target org, parent, and mode', async () => {
+      const payload = { saved: [{ id: 'new1' }], skipped: [], sourceTrashed: true }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await transferObject('id1', { targetOrgId: 'org-team', targetParent: 'photos', mode: 'move' })
+
+      expect(result).toEqual(payload)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/objects/id1/transfers')
+      expect(init.method).toBe('POST')
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
+      expect(body).toMatchObject({ targetOrgId: 'org-team', targetParent: 'photos', mode: 'move' })
+    })
+
+    it('throws on quota exceeded response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        makeResponse(
+          {
+            error: {
+              code: 422,
+              message: 'Quota exceeded',
+              status: 'RESOURCE_EXHAUSTED',
+              details: [
+                {
+                  '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+                  reason: 'QUOTA_EXCEEDED',
+                  domain: 'zpan.dev',
+                },
+              ],
+            },
+          },
+          false,
+          422,
+        ),
+      )
+
+      await expect(
+        transferObject('id1', { targetOrgId: 'org-team', targetParent: '', mode: 'copy' }),
+      ).rejects.toMatchObject({ name: 'ApiError', status: 422, reason: 'QUOTA_EXCEEDED' })
     })
   })
 
@@ -697,8 +900,203 @@ describe('api', () => {
     })
   })
 
+  describe('uploadPartToS3', () => {
+    class MockPartXHR {
+      static instances: MockPartXHR[] = []
+      upload = { onprogress: null as ((event: ProgressEvent) => void) | null }
+      onload: (() => void) | null = null
+      onerror: (() => void) | null = null
+      onabort: (() => void) | null = null
+      status = 200
+      method = ''
+      url = ''
+      body: unknown
+      headers: Record<string, string> = {}
+      responseHeaders: Record<string, string> = { ETag: '"etag-abc"' }
+
+      constructor() {
+        MockPartXHR.instances.push(this)
+      }
+      open(method: string, url: string) {
+        this.method = method
+        this.url = url
+      }
+      getResponseHeader(key: string) {
+        return this.responseHeaders[key] ?? null
+      }
+      setRequestHeader(key: string, value: string) {
+        this.headers[key] = value
+      }
+      send(body: unknown) {
+        this.body = body
+      }
+      abort() {
+        this.onabort?.()
+      }
+    }
+
+    beforeEach(() => {
+      MockPartXHR.instances = []
+      vi.stubGlobal('XMLHttpRequest', MockPartXHR)
+    })
+
+    it('PUTs the blob and resolves with the unquoted ETag', async () => {
+      const blob = new Blob(['chunk'])
+      const promise = uploadPartToS3('https://s3/part-1', blob)
+      const xhr = MockPartXHR.instances[0]
+      xhr.onload?.()
+
+      await expect(promise).resolves.toBe('etag-abc')
+      expect(xhr.method).toBe('PUT')
+      expect(xhr.url).toBe('https://s3/part-1')
+      expect(xhr.body).toBe(blob)
+    })
+
+    it('sets Content-Type only when one is provided', async () => {
+      const withType = uploadPartToS3('https://s3/part-1', new Blob(['chunk']), { contentType: 'audio/flac' })
+      const typedXhr = MockPartXHR.instances[0]
+      typedXhr.onload?.()
+      await withType
+
+      const withoutType = uploadPartToS3('https://s3/part-2', new Blob(['chunk']))
+      const untypedXhr = MockPartXHR.instances[1]
+      untypedXhr.onload?.()
+      await withoutType
+
+      expect(typedXhr.headers).toEqual({ 'Content-Type': 'audio/flac' })
+      expect(untypedXhr.headers).toEqual({})
+    })
+
+    it('rejects when the ETag header is not exposed', async () => {
+      const promise = uploadPartToS3('https://s3/part-1', new Blob(['x']))
+      const xhr = MockPartXHR.instances[0]
+      xhr.responseHeaders = {}
+      xhr.onload?.()
+
+      await expect(promise).rejects.toThrow(/ETag/)
+    })
+
+    it('rejects when the part upload fails', async () => {
+      const promise = uploadPartToS3('https://s3/part-1', new Blob(['x']))
+      const xhr = MockPartXHR.instances[0]
+      xhr.status = 500
+      xhr.onload?.()
+
+      await expect(promise).rejects.toThrow('Upload failed')
+    })
+
+    it('rejects immediately when the signal is already aborted', async () => {
+      const controller = new AbortController()
+      controller.abort()
+      const promise = uploadPartToS3('https://s3/part-1', new Blob(['x']), { signal: controller.signal })
+
+      await expect(promise).rejects.toMatchObject({ name: 'AbortError' })
+      expect(MockPartXHR.instances[0]?.body).toBeUndefined()
+    })
+
+    it('rejects on a network error', async () => {
+      const promise = uploadPartToS3('https://s3/part-1', new Blob(['x']))
+      const xhr = MockPartXHR.instances[0]
+      xhr.onerror?.()
+
+      await expect(promise).rejects.toThrow('Upload failed')
+    })
+
+    it('reports progress and rejects on abort', async () => {
+      const onProgress = vi.fn()
+      const controller = new AbortController()
+      const promise = uploadPartToS3('https://s3/part-1', new Blob(['x']), {
+        onProgress,
+        signal: controller.signal,
+      })
+      const xhr = MockPartXHR.instances[0]
+      xhr.upload.onprogress?.({ loaded: 2, total: 8, lengthComputable: true } as ProgressEvent)
+      expect(onProgress).toHaveBeenCalledWith({ loaded: 2, total: 8 })
+      controller.abort()
+      await expect(promise).rejects.toMatchObject({ name: 'AbortError' })
+    })
+  })
+
+  describe('presignObjectUploadParts', () => {
+    it('presigns parts via POST /api/objects/:id/uploads/:sessionId/parts', async () => {
+      const payload = {
+        uploadId: 'mp-1',
+        partSize: 5 * 1024 * 1024,
+        parts: [{ partNumber: 1, url: 'https://s3/part-1' }],
+      }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await presignObjectUploadParts('obj-1', 'sess-1', { partNumbers: [1] })
+
+      expect(result).toEqual(payload)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/objects/obj-1/uploads/sess-1/parts')
+      expect(init.method).toBe('POST')
+      expect(init.body).toBe(JSON.stringify({ partNumbers: [1] }))
+    })
+
+    it('throws ApiError on error response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'upload denied' }, false, 403))
+
+      await expect(presignObjectUploadParts('obj-1', 'sess-1', { partNumbers: [1] })).rejects.toThrow('upload denied')
+    })
+  })
+
+  describe('listTrash', () => {
+    it('calls GET /api/trash/objects with default pagination', async () => {
+      const payload = { items: [], nextPageToken: null }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await listTrash()
+
+      expect(result).toEqual(payload)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/trash/objects?')
+      expect(url).toContain('pageSize=20')
+      expect(url).not.toContain('pageToken=')
+      expect(init.method).toBe('GET')
+    })
+
+    it('passes provided pageToken and pageSize', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], nextPageToken: null }))
+
+      await listTrash({ pageToken: 'current-token', pageSize: 50 })
+
+      const [url] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('pageToken=current-token')
+      expect(url).toContain('pageSize=50')
+    })
+
+    it('throws on error response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
+
+      await expect(listTrash()).rejects.toThrow('forbidden')
+    })
+  })
+
+  describe('getTrashObject', () => {
+    it('fetches a trashed object via GET /api/trash/objects/:id', async () => {
+      // A trashed object is active with trashedAt set.
+      const obj = { id: 'id1', name: 'file.txt', status: 'active', trashedAt: 1700000000000 }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(obj))
+
+      const result = await getTrashObject('id1')
+
+      expect(result).toEqual(obj)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/trash/objects/id1')
+      expect(init.method).toBe('GET')
+    })
+
+    it('throws on error response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
+
+      await expect(getTrashObject('missing')).rejects.toThrow('not found')
+    })
+  })
+
   describe('restoreObject', () => {
-    it('sends PATCH with action: restore for the given id', async () => {
+    it('posts to /api/trash/objects/:id/restorations and returns the restored object', async () => {
       const obj = { id: 'id1', status: 'active' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(obj))
 
@@ -706,10 +1104,20 @@ describe('api', () => {
 
       expect(result).toEqual(obj)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/objects/id1')
-      expect(init.method).toBe('PATCH')
+      expect(url).toBe('/api/trash/objects/id1/restorations')
+      expect(init.method).toBe('POST')
       const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ action: 'restore' })
+      expect(body).toEqual({})
+    })
+
+    it('forwards an onConflict strategy in the body', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ id: 'id1', status: 'active' }))
+
+      await restoreObject('id1', 'rename')
+
+      const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
+      expect(body).toEqual({ onConflict: 'rename' })
     })
 
     it('throws on error response', async () => {
@@ -719,104 +1127,62 @@ describe('api', () => {
     })
   })
 
-  describe('emptyTrash', () => {
-    it('sends DELETE to trash endpoint', async () => {
-      const payload = { purged: 5 }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+  describe('purgeTrashObject', () => {
+    it('sends DELETE to /api/trash/objects/:id and resolves on 204', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
 
-      const result = await emptyTrash()
+      await expect(purgeTrashObject('id1')).resolves.toBeUndefined()
 
-      expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/trash')
+      expect(url).toBe('/api/trash/objects/id1')
       expect(init.method).toBe('DELETE')
     })
 
     it('throws on error response', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'server error' }, false, 500))
 
-      await expect(emptyTrash()).rejects.toThrow('server error')
-    })
-  })
-
-  describe('object upload sessions api', () => {
-    it('creates an upload session for an object', async () => {
-      const payload = { id: 'upload-1', object: { id: 'obj-1' } }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
-
-      const result = await createObjectUploadSession('obj-1', {
-        partSize: 5 * 1024 * 1024,
-      })
-
-      expect(result).toEqual(payload)
-      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/objects/obj-1/uploads')
-      expect(init.method).toBe('POST')
-      expect(init.body).toBe(JSON.stringify({ partSize: 5 * 1024 * 1024 }))
-    })
-
-    it('presigns upload session parts', async () => {
-      const payload = { parts: [{ partNumber: 1, uploadUrl: 'https://s3/part-1' }] }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
-
-      const result = await presignObjectUploadParts('obj-1', 'upload-1', { partNumbers: [1] })
-
-      expect(result).toEqual(payload)
-      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/objects/obj-1/uploads/upload-1/parts')
-      expect(init.method).toBe('POST')
-      expect(init.body).toBe(JSON.stringify({ partNumbers: [1] }))
-    })
-
-    it('patches an upload session', async () => {
-      const payload = { id: 'upload-1', status: 'completed', object: { id: 'obj-1' } }
-      const body = { action: 'complete' as const, parts: [{ partNumber: 1, etag: 'etag-1' }] }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
-
-      const result = await patchObjectUploadSession('obj-1', 'upload-1', body)
-
-      expect(result).toEqual(payload)
-      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/objects/obj-1/uploads/upload-1')
-      expect(init.method).toBe('PATCH')
-      expect(init.body).toBe(JSON.stringify(body))
-    })
-
-    it('throws ApiError on upload session failure', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'upload denied' }, false, 403))
-
-      await expect(createObjectUploadSession('obj-1', { partSize: 5 * 1024 * 1024 })).rejects.toThrow('upload denied')
+      await expect(purgeTrashObject('id1')).rejects.toThrow('server error')
     })
   })
 
   describe('remote download api', () => {
     it('lists download tasks with filters', async () => {
-      const payload = { items: [], total: 0, page: 2, pageSize: 10 }
+      const payload = { items: [], nextPageToken: 'next-token' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
       const result = await listDownloadTasks({
         status: 'downloading',
-        assignedTo: 'me',
         category: 'movies',
         tag: '4k',
-        sortBy: 'progress',
-        sortDir: 'asc',
-        page: 2,
         pageSize: 10,
+        pageToken: 'current-token',
       })
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/download-tasks?')
+      expect(url).toContain('/api/downloads/tasks?')
       expect(url).toContain('status=downloading')
-      expect(url).toContain('assignedTo=me')
       expect(url).toContain('category=movies')
       expect(url).toContain('tag=4k')
-      expect(url).toContain('sortBy=progress')
-      expect(url).toContain('sortDir=asc')
-      expect(url).toContain('page=2')
       expect(url).toContain('pageSize=10')
+      expect(url).toContain('pageToken=current-token')
       expect(init.method).toBe('GET')
+    })
+
+    it('gets a download task', async () => {
+      const payload = { id: 'task-1', status: { runtime: { files: [] } } }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      await expect(getDownloadTask('task-1')).resolves.toEqual(payload)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/downloads/tasks/task-1')
+      expect(init.method).toBe('GET')
+    })
+
+    it('throws when getting a download task fails', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
+
+      await expect(getDownloadTask('missing')).rejects.toThrow('not found')
     })
 
     it('creates a download task', async () => {
@@ -833,7 +1199,7 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/download-tasks')
+      expect(url).toContain('/api/downloads/tasks')
       expect(init.method).toBe('POST')
       expect(init.body).toBe(JSON.stringify(body))
     })
@@ -847,12 +1213,30 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/download-tasks/task-1')
+      expect(url).toContain('/api/downloads/tasks/task-1')
       expect(init.method).toBe('PATCH')
       expect(init.body).toBe(JSON.stringify(body))
     })
 
-    it('runs a download task action', async () => {
+    it('lists download task events', async () => {
+      const payload = { items: [{ id: 'event-1', action: 'download_task_created' }] }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await listDownloadTaskEvents('task-1')
+
+      expect(result).toEqual(payload)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/downloads/tasks/task-1/events')
+      expect(init.method).toBe('GET')
+    })
+
+    it('throws when listing download task events fails', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
+
+      await expect(listDownloadTaskEvents('missing')).rejects.toThrow('not found')
+    })
+
+    it('pauses a download task via PUT /status', async () => {
       const payload = { id: 'task-1', status: 'paused' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
@@ -860,9 +1244,63 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/download-tasks/task-1/actions')
+      expect(url).toBe('/api/downloads/tasks/task-1/status')
+      expect(init.method).toBe('PUT')
+      expect(init.body).toBe(JSON.stringify({ status: 'paused' }))
+    })
+
+    it('resumes a download task via PUT /status with queued', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ id: 'task-1', status: 'queued' }))
+
+      await runDownloadTaskAction('task-1', 'resume')
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/downloads/tasks/task-1/status')
+      expect(init.method).toBe('PUT')
+      expect(init.body).toBe(JSON.stringify({ status: 'queued' }))
+    })
+
+    it('cancels a download task via PUT /status with canceled', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ id: 'task-1', status: 'canceled' }))
+
+      await runDownloadTaskAction('task-1', 'cancel')
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/downloads/tasks/task-1/status')
+      expect(init.method).toBe('PUT')
+      expect(init.body).toBe(JSON.stringify({ status: 'canceled' }))
+    })
+
+    it('retries a download task via POST /attempts', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ id: 'task-1', status: 'queued' }, true, 201))
+
+      await runDownloadTaskAction('task-1', 'retry')
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/downloads/tasks/task-1/attempts')
       expect(init.method).toBe('POST')
-      expect(init.body).toBe(JSON.stringify({ action: 'pause' }))
+      expect(init.body).toBe(JSON.stringify({ fresh: false }))
+    })
+
+    it('restarts a download task via POST /attempts with fresh', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ id: 'task-1', status: 'queued' }, true, 201))
+
+      await runDownloadTaskAction('task-1', 'restart')
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/downloads/tasks/task-1/attempts')
+      expect(init.method).toBe('POST')
+      expect(init.body).toBe(JSON.stringify({ fresh: true }))
+    })
+
+    it('deletes a download task via DELETE (resolves on 204)', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
+
+      await expect(runDownloadTaskAction('task-1', 'delete')).resolves.toBeUndefined()
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/downloads/tasks/task-1')
+      expect(init.method).toBe('DELETE')
     })
 
     it('throws ApiError on download task action failure', async () => {
@@ -871,20 +1309,8 @@ describe('api', () => {
       await expect(runDownloadTaskAction('task-1', 'pause')).rejects.toThrow('Only active tasks can be paused')
     })
 
-    it('builds the download task events URL from RPC client', () => {
-      const url = downloadTaskEventsUrl({
-        status: 'downloading',
-        category: 'movies',
-        tag: '4k',
-        sortBy: 'status',
-        sortDir: 'desc',
-      })
-      expect(url.pathname).toBe('/api/download-tasks/events')
-      expect(url.searchParams.get('status')).toBe('downloading')
-      expect(url.searchParams.get('category')).toBe('movies')
-      expect(url.searchParams.get('tag')).toBe('4k')
-      expect(url.searchParams.get('sortBy')).toBe('status')
-      expect(url.searchParams.get('sortDir')).toBe('desc')
+    it('builds the unified server events URL from RPC client', () => {
+      expect(serverEventsUrl().pathname).toBe('/api/events')
     })
 
     it('lists admin downloaders', async () => {
@@ -895,7 +1321,7 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/downloaders')
+      expect(url).toContain('/api/downloads/downloaders')
       expect(init.method).toBe('GET')
     })
 
@@ -908,20 +1334,40 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/downloaders/downloader-1')
+      expect(url).toContain('/api/downloads/downloaders/downloader-1')
       expect(init.method).toBe('PATCH')
       expect(init.body).toBe(JSON.stringify(body))
     })
 
-    it('deletes an admin downloader', async () => {
-      const payload = { id: 'downloader-1', deleted: true }
+    it('updates downloader credit billing via dedicated route', async () => {
+      const payload = { id: 'downloader-1', remoteDownloadCreditBillingEnabled: true }
+      const body = { enabled: true, unitBytes: 2048, creditsPerUnit: 3 }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
-      const result = await deleteDownloader('downloader-1')
+      const result = await updateDownloaderCreditBilling('downloader-1', body)
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/downloaders/downloader-1')
+      expect(url).toContain('/api/downloads/downloaders/downloader-1/credit-billing')
+      expect(init.method).toBe('PUT')
+      expect(init.body).toBe(JSON.stringify(body))
+    })
+
+    it('throws ApiError on downloader credit billing failure', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Feature not available' }, false, 402))
+
+      await expect(
+        updateDownloaderCreditBilling('downloader-1', { enabled: true, unitBytes: 1, creditsPerUnit: 1 }),
+      ).rejects.toBeInstanceOf(ApiError)
+    })
+
+    it('deletes an admin downloader (resolves on 204)', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
+
+      await expect(deleteDownloader('downloader-1')).resolves.toBeUndefined()
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/downloads/downloaders/downloader-1')
       expect(init.method).toBe('DELETE')
     })
 
@@ -946,7 +1392,7 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/downloader/heartbeat')
+      expect(url).toContain('/api/downloads/downloaders/me/heartbeats')
       expect(init.method).toBe('POST')
       expect(init.body).toBe(JSON.stringify(body))
     })
@@ -989,14 +1435,14 @@ describe('api', () => {
     }
 
     it('lists jobs with status, type, and pagination query', async () => {
-      const payload = { items: [job], total: 1, page: 2, pageSize: 10 }
+      const payload = { items: [job], nextPageToken: 'next-token' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
       const result = await listBackgroundJobs({
         status: 'failed',
         type: 'archive_extract',
-        page: 2,
         pageSize: 10,
+        pageToken: 'current-token',
       })
 
       expect(result).toEqual(payload)
@@ -1004,9 +1450,24 @@ describe('api', () => {
       expect(url).toContain('/api/background-jobs?')
       expect(url).toContain('status=failed')
       expect(url).toContain('type=archive_extract')
-      expect(url).toContain('page=2')
+      expect(url).toContain('pageToken=current-token')
       expect(url).toContain('pageSize=10')
       expect(init.method).toBe('GET')
+    })
+
+    it('gets the active job count', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ activeCount: 3 }))
+
+      await expect(getActiveBackgroundJobCount()).resolves.toEqual({ activeCount: 3 })
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/background-jobs/stats')
+      expect(init.method).toBe('GET')
+    })
+
+    it('throws when active job stats fail', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'unavailable' }, false, 503))
+
+      await expect(getActiveBackgroundJobCount()).rejects.toThrow('unavailable')
     })
 
     it('creates a background job with JSON payload', async () => {
@@ -1039,8 +1500,9 @@ describe('api', () => {
 
       expect(result.status).toBe('canceled')
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/background-jobs/job-1/cancel')
-      expect(init.method).toBe('POST')
+      expect(url).toBe('/api/background-jobs/job-1/status')
+      expect(init.method).toBe('PUT')
+      expect(init.body).toBe(JSON.stringify({ status: 'canceled' }))
     })
 
     it('retries a failed background job', async () => {
@@ -1050,17 +1512,30 @@ describe('api', () => {
 
       expect(result.id).toBe('job-2')
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/background-jobs/job-1/retry')
+      expect(url).toBe('/api/background-jobs/job-1/retries')
       expect(init.method).toBe('POST')
     })
 
     it('throws ApiError for background job failures', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Background job cannot be retried' }, false, 409))
+      vi.mocked(fetch).mockResolvedValueOnce(
+        makeResponse(
+          {
+            error: {
+              code: 409,
+              message: 'Background job cannot be retried',
+              status: 'FAILED_PRECONDITION',
+              details: [],
+            },
+          },
+          false,
+          409,
+        ),
+      )
 
       await expect(retryBackgroundJob('job-1')).rejects.toMatchObject({
         name: 'ApiError',
         status: 409,
-        body: { error: 'Background job cannot be retried' },
+        message: 'Background job cannot be retried',
       })
     })
   })
@@ -1074,7 +1549,7 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/admin/storages')
+      expect(url).toContain('/api/site/storages')
     })
 
     it('throws on error response', async () => {
@@ -1086,28 +1561,28 @@ describe('api', () => {
 
   describe('createStorage', () => {
     const validInput = {
-      title: 'minio',
-      mode: 'private' as const,
+      provider: 'aws-s3',
       bucket: 'files',
       endpoint: 'https://minio.example.com',
       region: 'us-east-1',
       accessKey: 'key',
       secretKey: 'secret',
       capacity: 1073741824,
+      forcePathStyle: false,
     }
 
     it('posts storage data and returns created storage', async () => {
-      const storage = { id: 's1', title: 'minio', bucket: 'files' }
+      const storage = { id: 's1', bucket: 'files' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(storage))
 
       const result = await createStorage(validInput)
 
       expect(result).toEqual(storage)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/storages')
+      expect(url).toContain('/api/site/storages')
       expect(init.method).toBe('POST')
       const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ title: 'minio', bucket: 'files' })
+      expect(body).toMatchObject({ provider: 'aws-s3', bucket: 'files', forcePathStyle: false })
       const headers =
         init.headers instanceof Headers ? init.headers : new Headers(init.headers as Record<string, string>)
       expect(headers.get('Content-Type')).toContain('application/json')
@@ -1129,7 +1604,7 @@ describe('api', () => {
 
       expect(result).toEqual(storage)
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/admin/storages/s1')
+      expect(url).toContain('/api/site/storages/s1')
     })
 
     it('throws on error response', async () => {
@@ -1139,38 +1614,97 @@ describe('api', () => {
     })
   })
 
-  describe('updateStorage', () => {
-    it('puts updated storage data and returns updated storage', async () => {
-      const storage = { id: 's1', title: 'updated-minio' }
+  describe('replaceStorage', () => {
+    const replacement = {
+      provider: 'custom-s3',
+      bucket: 'updated-files',
+      endpoint: 'https://s3.example.com',
+      region: 'auto',
+      accessKey: 'access-key',
+      secretKey: 'secret-key',
+      capacity: 0,
+      forcePathStyle: false,
+      egressCreditBillingEnabled: false,
+      egressCreditUnitBytes: 104857600,
+      egressCreditPerUnit: 1,
+      enabled: true,
+    }
+
+    it('puts a complete storage replacement and returns the storage', async () => {
+      const storage = { id: 's1', bucket: 'updated-files' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(storage))
 
-      const result = await updateStorage('s1', { title: 'updated-minio' })
+      const result = await replaceStorage('s1', replacement)
 
       expect(result).toEqual(storage)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/storages/s1')
+      expect(url).toContain('/api/site/storages/s1')
       expect(init.method).toBe('PUT')
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ title: 'updated-minio' })
+      expect(init.body).toBe(JSON.stringify(replacement))
     })
 
-    it('throws on error response', async () => {
+    it('throws ApiError on error response', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
 
-      await expect(updateStorage('s1', { title: 'x' })).rejects.toThrow('forbidden')
+      await expect(replaceStorage('s1', replacement)).rejects.toBeInstanceOf(ApiError)
+    })
+  })
+
+  describe('patchStorage', () => {
+    it('patches partial storage state and returns the storage', async () => {
+      const storage = { id: 's1', enabled: false }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(storage))
+
+      const result = await patchStorage('s1', { enabled: false })
+
+      expect(result).toEqual(storage)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/site/storages/s1')
+      expect(init.method).toBe('PATCH')
+      expect(init.body).toBe(JSON.stringify({ enabled: false }))
+    })
+
+    it('throws ApiError on error response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
+
+      await expect(
+        patchStorage('missing', { status: 'unhealthy', statusReason: 'network_error' }),
+      ).rejects.toBeInstanceOf(ApiError)
+    })
+  })
+
+  describe('updateStorageEgressBilling', () => {
+    it('puts storage egress billing data and returns updated storage', async () => {
+      const storage = { id: 's1', egressCreditBillingEnabled: true }
+      const body = { enabled: true, unitBytes: 2048, creditsPerUnit: 3 }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(storage))
+
+      const result = await updateStorageEgressBilling('s1', body)
+
+      expect(result).toEqual(storage)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/site/storages/s1/egress-billing')
+      expect(init.method).toBe('PUT')
+      expect(init.body).toBe(JSON.stringify(body))
+    })
+
+    it('throws ApiError on error response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Feature not available' }, false, 402))
+
+      await expect(
+        updateStorageEgressBilling('s1', { enabled: true, unitBytes: 1, creditsPerUnit: 1 }),
+      ).rejects.toBeInstanceOf(ApiError)
     })
   })
 
   describe('deleteStorage', () => {
-    it('sends DELETE request and returns deleted flag', async () => {
-      const payload = { id: 's1', deleted: true }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+    it('sends DELETE request (resolves on 204)', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
 
-      const result = await deleteStorage('s1')
+      await expect(deleteStorage('s1')).resolves.toBeUndefined()
 
-      expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/storages/s1')
+      expect(url).toContain('/api/site/storages/s1')
       expect(init.method).toBe('DELETE')
     })
 
@@ -1178,144 +1712,6 @@ describe('api', () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
 
       await expect(deleteStorage('missing')).rejects.toThrow('not found')
-    })
-  })
-
-  describe('listUsers', () => {
-    it('fetches users with page and pageSize query params', async () => {
-      const payload = { items: [{ id: 'u1', name: 'Alice' }], total: 1 }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
-
-      const result = await listUsers(2, 20)
-
-      expect(result).toEqual(payload)
-      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/admin/users')
-      expect(url).toContain('page=2')
-      expect(url).toContain('pageSize=20')
-    })
-
-    it('includes search query when provided', async () => {
-      const payload = { items: [], total: 0 }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
-
-      await listUsers(1, 20, 'alice')
-
-      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('search=alice')
-    })
-
-    it('throws on error response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
-
-      await expect(listUsers(1, 10)).rejects.toThrow('forbidden')
-    })
-  })
-
-  describe('updateUserStatus', () => {
-    it('patches user and returns updated user', async () => {
-      const updated = { id: 'u1', status: 'active' }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(updated))
-
-      const result = await updateUserStatus('u1', 'active')
-
-      expect(result).toEqual(updated)
-      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/users/u1')
-      expect(init.method).toBe('PATCH')
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ status: 'active' })
-    })
-
-    it('sends disabled status correctly', async () => {
-      const updated = { id: 'u1', status: 'disabled' }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(updated))
-
-      await updateUserStatus('u1', 'disabled')
-
-      const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ status: 'disabled' })
-    })
-
-    it('throws on error response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
-
-      await expect(updateUserStatus('missing', 'active')).rejects.toThrow('not found')
-    })
-  })
-
-  describe('deleteUser', () => {
-    it('sends DELETE request and returns deleted flag', async () => {
-      const payload = { id: 'u1', deleted: true }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
-
-      const result = await deleteUser('u1')
-
-      expect(result).toEqual(payload)
-      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/users/u1')
-      expect(init.method).toBe('DELETE')
-    })
-
-    it('throws on error response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
-
-      await expect(deleteUser('u1')).rejects.toThrow('forbidden')
-    })
-  })
-
-  describe('batchUpdateUserStatus', () => {
-    it('patches batch endpoint with disable action', async () => {
-      const payload = { updated: 2, ids: ['u1', 'u2'], status: 'disabled' }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
-
-      const result = await batchUpdateUserStatus(['u1', 'u2'], 'disabled')
-
-      expect(result).toEqual(payload)
-      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/users/batch')
-      expect(init.method).toBe('PATCH')
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ action: 'disable', ids: ['u1', 'u2'] })
-    })
-
-    it('patches batch endpoint with enable action', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ updated: 1, ids: ['u1'], status: 'active' }))
-
-      await batchUpdateUserStatus(['u1'], 'active')
-
-      const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ action: 'enable', ids: ['u1'] })
-    })
-
-    it('throws on error response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
-
-      await expect(batchUpdateUserStatus(['missing'], 'disabled')).rejects.toThrow('not found')
-    })
-  })
-
-  describe('batchDeleteUsers', () => {
-    it('deletes users through batch endpoint', async () => {
-      const payload = { deleted: 2, ids: ['u1', 'u2'] }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
-
-      const result = await batchDeleteUsers(['u1', 'u2'])
-
-      expect(result).toEqual(payload)
-      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/users/batch')
-      expect(init.method).toBe('DELETE')
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ ids: ['u1', 'u2'] })
-    })
-
-    it('throws on error response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
-
-      await expect(batchDeleteUsers(['u1'])).rejects.toThrow('forbidden')
     })
   })
 
@@ -1347,7 +1743,7 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/users/u1/entitlements')
+      expect(url).toContain('/api/users/u1/entitlements')
       expect(init.method).toBe('GET')
     })
 
@@ -1376,7 +1772,7 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/users/u1/entitlements')
+      expect(url).toContain('/api/users/u1/entitlements')
       expect(init.method).toBe('POST')
       const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
       expect(body).toMatchObject({ resourceType: 'storage', bytes: 2048, expiresAt: null })
@@ -1407,38 +1803,19 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/users/u1/entitlements/ent-2')
+      expect(url).toContain('/api/users/u1/entitlements/ent-2')
       expect(init.method).toBe('PATCH')
       const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
       expect(body).toMatchObject({ bytes: 4096, expiresAt: null })
     })
 
-    it('revokes a user quota entitlement', async () => {
-      const payload = {
-        orgId: 'org-1',
-        entitlement: {
-          id: 'ent-2',
-          orgId: 'org-1',
-          resourceType: 'storage',
-          entitlementType: 'grant',
-          source: 'admin_grant',
-          sourceId: 'admin_grant:1',
-          bytes: 2048,
-          startsAt: '2026-05-01T00:00:00.000Z',
-          expiresAt: null,
-          status: 'revoked',
-          metadata: null,
-          createdAt: '2026-05-01T00:00:00.000Z',
-          updatedAt: '2026-05-02T00:00:00.000Z',
-        },
-      }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+    it('revokes a user quota entitlement (resolves on 204)', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
 
-      const result = await revokeUserEntitlement('u1', 'ent-2')
+      await expect(revokeUserEntitlement('u1', 'ent-2')).resolves.toBeUndefined()
 
-      expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/users/u1/entitlements/ent-2')
+      expect(url).toContain('/api/users/u1/entitlements/ent-2')
       expect(init.method).toBe('DELETE')
     })
 
@@ -1478,13 +1855,119 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/admin/quotas')
+      expect(url).toContain('/api/quotas')
     })
 
     it('throws on error response', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
 
       await expect(listQuotas()).rejects.toThrow('forbidden')
+    })
+  })
+
+  describe('getUserQuotaById', () => {
+    it('fetches a single user quota from the user sub-resource', async () => {
+      const payload = { used: 512, total: 1024, hasPersonalOrg: true }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await getUserQuotaById('u1')
+
+      expect(result).toEqual(payload)
+      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
+      expect(url).toContain('/api/users/u1/quota')
+    })
+
+    it('throws on error response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
+
+      await expect(getUserQuotaById('u1')).rejects.toThrow('forbidden')
+    })
+  })
+
+  describe('teams', () => {
+    it('lists teams', async () => {
+      const payload = { items: [{ id: 'team-1', name: 'Alpha' }], total: 1 }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await listTeams()
+
+      expect(result).toEqual(payload)
+      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
+      expect(url).toContain('/api/teams')
+    })
+
+    it('gets a team detail', async () => {
+      const payload = { id: 'team-1', name: 'Alpha', quotaTotal: 20971520 }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await getTeam('team-1')
+
+      expect(result).toEqual(payload)
+      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
+      expect(url).toContain('/api/teams/team-1')
+    })
+
+    it('throws on error response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
+
+      await expect(getTeam('missing')).rejects.toThrow('not found')
+    })
+  })
+
+  describe('org entitlements', () => {
+    it('lists entitlements for an org', async () => {
+      const payload = { orgId: 'team-1', items: [] }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await listOrgEntitlements('team-1')
+
+      expect(result).toEqual(payload)
+      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
+      expect(url).toContain('/api/teams/team-1/entitlements')
+    })
+
+    it('grants an entitlement to an org', async () => {
+      const payload = { orgId: 'team-1', entitlement: { id: 'ent-1', bytes: 1024 } }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await grantOrgEntitlement('team-1', { resourceType: 'storage', bytes: 1024, note: 'starter' })
+
+      expect(result).toEqual(payload)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/teams/team-1/entitlements')
+      expect(init.method).toBe('POST')
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
+      expect(body).toMatchObject({ resourceType: 'storage', bytes: 1024, note: 'starter' })
+    })
+
+    it('updates an org entitlement', async () => {
+      const payload = { orgId: 'team-1', entitlement: { id: 'ent-1', bytes: 4096 } }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await updateOrgEntitlement('team-1', 'ent-1', { bytes: 4096 })
+
+      expect(result).toEqual(payload)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/teams/team-1/entitlements/ent-1')
+      expect(init.method).toBe('PATCH')
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
+      expect(body).toMatchObject({ bytes: 4096 })
+    })
+
+    it('revokes an org entitlement (resolves on 204)', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
+
+      await expect(revokeOrgEntitlement('team-1', 'ent-1')).resolves.toBeUndefined()
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/teams/team-1/entitlements/ent-1')
+      expect(init.method).toBe('DELETE')
+    })
+
+    it('throws on error response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
+
+      await expect(listOrgEntitlements('missing')).rejects.toThrow('not found')
     })
   })
 
@@ -1522,86 +2005,203 @@ describe('api', () => {
     })
   })
 
-  describe('listSystemOptions', () => {
-    it('fetches all system options', async () => {
-      const payload = { items: [{ key: 'site_name', value: 'ZPan', public: true }], total: 1 }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+  describe('storage usage', () => {
+    const usage = {
+      usedBytes: 256,
+      quotaBytes: 1024,
+      currentPlan: null,
+      breakdowns: [{ category: 'documents', bytes: 256, fileCount: 2 }],
+      updatedAt: '2026-07-23T00:00:00.000Z',
+    }
 
-      const result = await listSystemOptions()
-
-      expect(result).toEqual(payload)
-      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/system/options')
+    it('gets storage usage through the RPC route', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(usage))
+      await expect(getStorageUsage()).resolves.toEqual(usage)
+      expect((vi.mocked(fetch).mock.calls[0] as [string])[0]).toContain('/api/storage')
     })
 
-    it('throws on error response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
+    it('lists category items with the expected query', async () => {
+      const page = { items: [], total: 0, page: 2, pageSize: 10 }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(page))
+      await expect(listStorageUsageItems('trash', 2, 10, 'name', 'asc')).resolves.toEqual(page)
+      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
+      expect(url).toContain('/api/storage/items')
+      expect(url).toContain('category=trash')
+      expect(url).toContain('page=2')
+      expect(url).toContain('sortBy=name')
+      expect(url).toContain('sortDir=asc')
+    })
 
-      await expect(listSystemOptions()).rejects.toThrow('forbidden')
+    it('throws ApiError for usage and item failures', async () => {
+      for (const call of [() => getStorageUsage(), () => listStorageUsageItems('photos')]) {
+        vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'unavailable' }, false, 503))
+        await expect(call()).rejects.toBeInstanceOf(ApiError)
+      }
     })
   })
 
-  describe('getSystemOption', () => {
-    it('fetches a single system option by key', async () => {
-      const option = { key: 'site_name', value: 'ZPan', public: true }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(option))
+  describe('site configuration', () => {
+    const config = {
+      site: { name: 'ZPan', description: '', publicUrl: 'https://pan.example.com' },
+      branding: {
+        logoUrl: null,
+        faviconUrl: null,
+        wordmark: null,
+        hidePoweredBy: false,
+        theme: { mode: 'preset', preset: 'default', custom: null, configured: false },
+      },
+      auth: { signupMode: 'invite_only', captcha: { enabled: false }, providers: [] },
+      services: { webdav: { enabled: true, url: 'https://pan.example.com/dav/' } },
+    } as const
+    const settings = {
+      identity: config.site,
+      registration: { configuredMode: 'open', effectiveMode: 'invite_only' },
+      captcha: {
+        enabled: false,
+        provider: 'cloudflare-turnstile',
+        siteKey: '',
+        secretConfigured: false,
+        minScore: null,
+      },
+      quotas: { defaultOrgBytes: 1024, defaultTeamBytes: 1024, defaultMonthlyTrafficBytes: 0 },
+      webdav: {
+        enabled: true,
+        domain: '',
+        pathUrl: 'https://pan.example.com/dav/',
+        candidateUrl: 'https://dav.pan.example.com/',
+        status: 'unverified',
+        lastVerifiedAt: null,
+        error: null,
+      },
+    } as const
 
-      const result = await getSystemOption('site_name')
-
-      expect(result).toEqual(option)
-      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/system/options/site_name')
+    it('gets the public configz document', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(config))
+      await expect(getSiteConfig()).resolves.toEqual(config)
+      expect(vi.mocked(fetch).mock.calls[0]?.[0]).toContain('/api/configz')
     })
 
-    it('throws on error response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
-
-      await expect(getSystemOption('missing_key')).rejects.toThrow('not found')
+    it('throws when configz fails', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'failed' }, false, 500))
+      await expect(getSiteConfig()).rejects.toThrow('failed')
     })
-  })
 
-  describe('setSystemOption', () => {
-    it('puts option with value only when isPublic is not provided', async () => {
-      const option = { key: 'site_name', value: 'MyZPan', public: false }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(option))
+    it('gets the structured admin settings', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(settings))
+      await expect(getSiteSettings()).resolves.toEqual(settings)
+      expect(vi.mocked(fetch).mock.calls[0]?.[0]).toContain('/api/site/settings')
+    })
 
-      const result = await setSystemOption('site_name', 'MyZPan')
+    it('throws when reading settings fails', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'unauthorized' }, false, 401))
+      await expect(getSiteSettings()).rejects.toThrow('unauthorized')
+    })
 
-      expect(result).toEqual(option)
+    it('updates identity with a structured payload', async () => {
+      const input = { name: 'ZPan', description: 'Files', publicUrl: 'https://pan.example.com' }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(input))
+      await expect(updateSiteIdentity(input)).resolves.toEqual(input)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/system/options/site_name')
+      expect(url).toContain('/api/site/settings/identity')
       expect(init.method).toBe('PUT')
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toEqual({ value: 'MyZPan' })
-      expect(body.public).toBeUndefined()
+      expect(JSON.parse(String(init.body))).toEqual(input)
     })
 
-    it('puts option with value and public=true when isPublic is true', async () => {
-      const option = { key: 'site_name', value: 'MyZPan', public: true }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(option))
-
-      await setSystemOption('site_name', 'MyZPan', true)
-
-      const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toEqual({ value: 'MyZPan', public: true })
-    })
-
-    it('puts option with value and public=false when isPublic is false', async () => {
-      const option = { key: 'site_name', value: 'MyZPan', public: false }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(option))
-
-      await setSystemOption('site_name', 'MyZPan', false)
-
-      const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toEqual({ value: 'MyZPan', public: false })
-    })
-
-    it('throws on error response', async () => {
+    it('throws when updating identity fails', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
+      await expect(
+        updateSiteIdentity({ name: 'ZPan', description: '', publicUrl: 'https://pan.example.com' }),
+      ).rejects.toThrow('forbidden')
+    })
 
-      await expect(setSystemOption('key', 'val')).rejects.toThrow('forbidden')
+    it('updates registration mode', async () => {
+      const result = { configuredMode: 'closed', effectiveMode: 'closed' }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(result))
+      await expect(updateSiteRegistration({ mode: 'closed' })).resolves.toEqual(result)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/site/settings/registration')
+      expect(init.method).toBe('PUT')
+      expect(JSON.parse(String(init.body))).toEqual({ mode: 'closed' })
+    })
+
+    it('throws when updating registration fails', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'blocked' }, false, 402))
+      await expect(updateSiteRegistration({ mode: 'open' })).rejects.toThrow('blocked')
+    })
+
+    it('updates captcha without requiring a secret in every request', async () => {
+      const input = {
+        enabled: true,
+        provider: 'hcaptcha' as const,
+        siteKey: 'site-key',
+        minScore: null,
+      }
+      const result = { ...input, secretConfigured: true }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(result))
+      await expect(updateSiteCaptcha(input)).resolves.toEqual(result)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/site/settings/captcha')
+      expect(init.method).toBe('PUT')
+      expect(JSON.parse(String(init.body))).toEqual(input)
+    })
+
+    it('throws when updating captcha fails', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'invalid' }, false, 400))
+      await expect(
+        updateSiteCaptcha({ enabled: true, provider: 'hcaptcha', siteKey: '', minScore: null }),
+      ).rejects.toThrow('invalid')
+    })
+
+    it('updates all quota settings atomically', async () => {
+      const input = { defaultOrgBytes: 1024, defaultTeamBytes: 2048, defaultMonthlyTrafficBytes: 0 }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(input))
+      await expect(updateSiteQuotas(input)).resolves.toEqual(input)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/site/settings/quotas')
+      expect(init.method).toBe('PUT')
+      expect(JSON.parse(String(init.body))).toEqual(input)
+    })
+
+    it('throws when updating quotas fails', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'invalid' }, false, 400))
+      await expect(
+        updateSiteQuotas({ defaultOrgBytes: 0, defaultTeamBytes: 0, defaultMonthlyTrafficBytes: 0 }),
+      ).rejects.toThrow('invalid')
+    })
+
+    it('verifies the derived WebDAV domain', async () => {
+      const result = { ...settings.webdav, status: 'ready', lastVerifiedAt: '2026-07-20T12:00:00.000Z' }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(result))
+
+      await expect(verifySiteWebDav()).resolves.toEqual(result)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/site/settings/webdav/verifications')
+      expect(init.method).toBe('POST')
+    })
+
+    it('updates WebDAV settings with a structured payload', async () => {
+      const input = { enabled: true, domain: 'webdisk.example.com' }
+      const result = { ...settings.webdav, ...input, candidateUrl: 'https://webdisk.example.com/' }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(result))
+
+      await expect(updateSiteWebDav(input)).resolves.toEqual(result)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/site/settings/webdav')
+      expect(init.method).toBe('PUT')
+      expect(JSON.parse(String(init.body))).toEqual(input)
+    })
+
+    it('throws when updating WebDAV settings fails', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'invalid' }, false, 400))
+      await expect(updateSiteWebDav({ enabled: true, domain: 'https://invalid' })).rejects.toMatchObject({
+        name: 'ApiError',
+        status: 400,
+      })
+    })
+
+    it('throws when WebDAV verification fails at the API boundary', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'unauthorized' }, false, 401))
+      await expect(verifySiteWebDav()).rejects.toMatchObject({ name: 'ApiError', status: 401 })
     })
   })
 
@@ -1616,43 +2216,108 @@ describe('api', () => {
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
       expect(url).toBe('/api/auth/get-session')
       expect(init.credentials).toBe('include')
+      expect(init.signal).toBeInstanceOf(AbortSignal)
     })
 
-    it('returns null when response is not ok', async () => {
+    it('throws ApiError when response is not ok', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'unauthorized' }, false, 401))
 
+      const promise = getSession()
+
+      await expect(promise).rejects.toMatchObject({ name: 'ApiError', status: 401 })
+    })
+
+    it('aborts and throws when the session request times out', async () => {
+      vi.useFakeTimers()
+      vi.mocked(fetch).mockImplementationOnce(
+        (_url, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+          }),
+      )
+
+      const promise = getSession()
+      const assertion = expect(promise).rejects.toThrow('Session request timed out')
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      await assertion
+      vi.useRealTimers()
+    })
+
+    it('shares one in-flight request across concurrent callers', async () => {
+      const session = { session: { id: 'sess1' }, user: { id: 'u1' } }
+      let resolveFetch: (res: Response) => void = () => {}
+      vi.mocked(fetch).mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveFetch = resolve
+          }),
+      )
+
+      const first = getSession()
+      const second = getSession()
+      resolveFetch(makeResponse(session))
+
+      expect(await first).toEqual(session)
+      expect(await second).toEqual(session)
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+    })
+
+    it('serves a resolved session from cache within the TTL and refetches after it', async () => {
+      vi.useFakeTimers()
+      const session = { session: { id: 'sess1' }, user: { id: 'u1' } }
+      vi.mocked(fetch).mockResolvedValue(makeResponse(session))
+
+      await getSession()
+      await getSession()
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(5_001)
+      await getSession()
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+      vi.useRealTimers()
+    })
+
+    it('keeps sharing a slow in-flight request past the TTL instead of piling up duplicates', async () => {
+      vi.useFakeTimers()
+      const session = { session: { id: 'sess1' }, user: { id: 'u1' } }
+      let resolveFetch: (res: Response) => void = () => {}
+      vi.mocked(fetch).mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveFetch = resolve
+          }),
+      )
+
+      const first = getSession()
+      await vi.advanceTimersByTimeAsync(6_000)
+      const second = getSession()
+      resolveFetch(makeResponse(session))
+
+      expect(await first).toEqual(session)
+      expect(await second).toEqual(session)
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+      vi.useRealTimers()
+    })
+
+    it('does not cache failures — the next call retries', async () => {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce(makeResponse({ error: 'unavailable' }, false, 503))
+        .mockResolvedValueOnce(makeResponse({ session: { id: 'sess1' }, user: { id: 'u1' } }))
+
+      await expect(getSession()).rejects.toMatchObject({ name: 'ApiError', status: 503 })
+
       const result = await getSession()
-
-      expect(result).toBeNull()
-    })
-  })
-
-  describe('trashObject', () => {
-    it('sends PATCH with action: trash for the given id', async () => {
-      const obj = { id: 'id1', status: 'trashed' }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(obj))
-
-      const result = await trashObject('id1')
-
-      expect(result).toEqual(obj)
-      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/objects/id1')
-      expect(init.method).toBe('PATCH')
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ action: 'trash' })
-    })
-
-    it('throws on error response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'not found' }, false, 404))
-
-      await expect(trashObject('missing')).rejects.toThrow('not found')
+      expect(result).toEqual({ session: { id: 'sess1' }, user: { id: 'u1' } })
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
     })
   })
 
   describe('listAuthProviders', () => {
-    it('fetches auth providers list from /api/auth-providers', async () => {
+    it('fetches auth providers list from /api/site/auth-providers', async () => {
       const payload = {
         items: [{ providerId: 'github', type: 'oauth', name: 'GitHub', icon: '' }],
+        callbackBaseUri: 'https://files.example',
       }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
@@ -1660,12 +2325,14 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/auth-providers')
+      expect(url).toContain('/api/site/auth-providers')
     })
 
     it('returns items array with expected provider shape', async () => {
       const provider = { providerId: 'google', type: 'oauth', name: 'Google', icon: 'google-icon' }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [provider] }))
+      vi.mocked(fetch).mockResolvedValueOnce(
+        makeResponse({ items: [provider], callbackBaseUri: 'https://files.example' }),
+      )
 
       const result = await listAuthProviders()
 
@@ -1677,11 +2344,12 @@ describe('api', () => {
     })
 
     it('returns empty items array when no providers are configured', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [] }))
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], callbackBaseUri: 'https://files.example' }))
 
       const result = await listAuthProviders()
 
       expect(result.items).toHaveLength(0)
+      expect(result.callbackBaseUri).toBe('https://files.example')
     })
 
     it('throws on error response', async () => {
@@ -1691,7 +2359,7 @@ describe('api', () => {
     })
 
     it('passes credentials: include', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [] }))
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], callbackBaseUri: 'https://files.example' }))
 
       await listAuthProviders()
 
@@ -1701,32 +2369,26 @@ describe('api', () => {
   })
 
   describe('getProfile', () => {
-    it('fetches public profile by username', async () => {
+    it('gets the exact public profile path and returns its concrete share items', async () => {
       const payload = {
         user: { username: 'alice', name: 'Alice', image: null },
-        shares: [],
+        shares: [{ token: 'share-1', name: 'photo.jpg', type: 'image/jpeg', size: 42, isFolder: false }],
       }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
       const result = await getProfile('alice')
 
       expect(result).toEqual(payload)
-      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/profiles/alice')
-    })
-
-    it('returns shares with download URLs', async () => {
-      const matter = { id: 'm1', name: 'photo.jpg', dirtype: 0, downloadUrl: 'https://s3/photo.jpg' }
-      const payload = {
-        user: { username: 'bob', name: 'Bob', image: null },
-        shares: [matter],
-      }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
-
-      const result = await getProfile('bob')
-
-      expect(result.shares).toHaveLength(1)
-      expect(result.shares[0].downloadUrl).toBe('https://s3/photo.jpg')
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/users/alice')
+      expect(init.method).toBe('GET')
+      expect(result.shares[0]).toEqual({
+        token: 'share-1',
+        name: 'photo.jpg',
+        type: 'image/jpeg',
+        size: 42,
+        isFolder: false,
+      })
     })
 
     it('throws on 404 response', async () => {
@@ -1738,7 +2400,7 @@ describe('api', () => {
 
   describe('listNotifications', () => {
     it('calls /api/notifications with default params', async () => {
-      const payload = { items: [], total: 0, unreadCount: 0, page: 1, pageSize: 20 }
+      const payload = { items: [], nextPageToken: null }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
       const result = await listNotifications()
@@ -1746,19 +2408,18 @@ describe('api', () => {
       expect(result).toEqual(payload)
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
       expect(url).toContain('/api/notifications')
-      expect(url).toContain('page=1')
       expect(url).toContain('pageSize=20')
       expect(url).toContain('unread=false')
     })
 
-    it('passes page, pageSize, and unreadOnly params', async () => {
-      const payload = { items: [], total: 5, unreadCount: 5, page: 2, pageSize: 10 }
+    it('passes pageToken, pageSize, and unreadOnly params', async () => {
+      const payload = { items: [], nextPageToken: 'next-token' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
-      await listNotifications(2, 10, true)
+      await listNotifications({ pageToken: 'current-token', pageSize: 10, unreadOnly: true })
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('page=2')
+      expect(url).toContain('pageToken=current-token')
       expect(url).toContain('pageSize=10')
       expect(url).toContain('unread=true')
     })
@@ -1852,7 +2513,7 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/announcements')
+      expect(url).toContain('/api/site/announcements')
       expect(url).toContain('page=1')
       expect(url).toContain('pageSize=20')
     })
@@ -1870,7 +2531,7 @@ describe('api', () => {
       await listActiveAnnouncements()
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/announcements')
+      expect(url).toContain('/api/site/announcements')
       expect(url).toContain('scope=active')
     })
 
@@ -1887,7 +2548,8 @@ describe('api', () => {
       await listAdminAnnouncements(1, 20, 'published')
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/admin/announcements')
+      expect(url).toContain('/api/site/announcements')
+      expect(url).toContain('scope=all')
       expect(url).toContain('status=published')
     })
 
@@ -1904,7 +2566,7 @@ describe('api', () => {
 
       expect(result).toEqual(announcement)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/admin/announcements')
+      expect(url).toBe('/api/site/announcements')
       expect(init.method).toBe('POST')
       expect(JSON.parse(init.body as string)).toEqual(input)
     })
@@ -1915,7 +2577,7 @@ describe('api', () => {
       await getAnnouncement('ann-1')
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/admin/announcements/ann-1')
+      expect(url).toBe('/api/site/announcements/ann-1')
       expect(init.method).toBe('GET')
     })
 
@@ -1931,7 +2593,7 @@ describe('api', () => {
       await updateAnnouncement('ann-1', input)
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/admin/announcements/ann-1')
+      expect(url).toBe('/api/site/announcements/ann-1')
       expect(init.method).toBe('PUT')
       expect(JSON.parse(init.body as string)).toEqual(input)
     })
@@ -1942,14 +2604,13 @@ describe('api', () => {
       await expect(updateAnnouncement('ann-1', input)).rejects.toThrow('Invalid announcement')
     })
 
-    it('deletes an announcement', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ id: 'ann-1', deleted: true }))
+    it('deletes an announcement (resolves on 204)', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
 
-      const result = await deleteAnnouncement('ann-1')
+      await expect(deleteAnnouncement('ann-1')).resolves.toBeUndefined()
 
-      expect(result).toEqual({ id: 'ann-1', deleted: true })
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/admin/announcements/ann-1')
+      expect(url).toBe('/api/site/announcements/ann-1')
       expect(init.method).toBe('DELETE')
     })
 
@@ -1968,7 +2629,7 @@ describe('api', () => {
 
   describe('listShares', () => {
     it('calls /api/shares with default params', async () => {
-      const payload = { items: [], total: 0, page: 1, pageSize: 20 }
+      const payload = { items: [], nextPageToken: null }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
       const result = await listShares()
@@ -1976,18 +2637,18 @@ describe('api', () => {
       expect(result).toEqual(payload)
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
       expect(url).toContain('/api/shares')
-      expect(url).toContain('page=1')
       expect(url).toContain('pageSize=20')
+      expect(url).not.toContain('pageToken=')
     })
 
-    it('passes page, pageSize, and status params', async () => {
-      const payload = { items: [], total: 3, page: 2, pageSize: 10 }
+    it('passes pageToken, pageSize, and status params', async () => {
+      const payload = { items: [], nextPageToken: 'later-token' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
-      await listShares(2, 10, 'active')
+      await listShares('current-token', 10, 'active')
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('page=2')
+      expect(url).toContain('pageToken=current-token')
       expect(url).toContain('pageSize=10')
       expect(url).toContain('status=active')
     })
@@ -1996,6 +2657,26 @@ describe('api', () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'unauthorized' }, false, 401))
 
       await expect(listShares()).rejects.toThrow('unauthorized')
+    })
+  })
+
+  describe('listReceivedShares', () => {
+    it('calls /api/shares with box=received', async () => {
+      const payload = { items: [], nextPageToken: null }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await listReceivedShares()
+
+      expect(result).toEqual(payload)
+      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
+      expect(url).toContain('/api/shares')
+      expect(url).toContain('box=received')
+    })
+
+    it('throws on error response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'unauthorized' }, false, 401))
+
+      await expect(listReceivedShares()).rejects.toThrow('unauthorized')
     })
   })
 
@@ -2009,6 +2690,7 @@ describe('api', () => {
         downloadLimit: null,
         matter: { name: 'photo.jpg', type: 'image/jpeg', size: 1024, isFolder: false },
         creatorName: 'Alice',
+        creatorUsername: 'alice',
         requiresPassword: false,
         expired: false,
         exhausted: false,
@@ -2039,42 +2721,70 @@ describe('api', () => {
     })
   })
 
-  describe('deleteShare', () => {
-    it('calls DELETE /api/shares/:token and resolves on 204', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 204 } as Response)
+  describe('revokeShare', () => {
+    it('puts status: revoked to /api/shares/:token/status and resolves with the revoked share', async () => {
+      const payload = { token: 'tok123', status: 'revoked', kind: 'landing' }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
-      await expect(deleteShare('tok123')).resolves.toBeUndefined()
+      const result = await revokeShare('tok123')
+
+      expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/shares/tok123')
-      expect(init.method).toBe('DELETE')
+      expect(url).toContain('/api/shares/tok123/status')
+      expect(init.method).toBe('PUT')
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
+      expect(body).toEqual({ status: 'revoked' })
     })
 
     it('throws ApiError on non-ok response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce({ ok: false, status: 403, statusText: 'Forbidden' } as Response)
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Forbidden' }, false, 403))
 
-      await expect(deleteShare('tok123')).rejects.toThrow('Forbidden')
+      await expect(revokeShare('tok123')).rejects.toThrow('Forbidden')
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Forbidden' }, false, 403))
+      await expect(revokeShare('tok123')).rejects.toBeInstanceOf(ApiError)
+    })
+  })
+
+  describe('share privacy', () => {
+    it('updates privacy with PUT on the exact resource path', async () => {
+      const payload = { private: true }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      await expect(setSharePrivacy('tok123', true)).resolves.toEqual(payload)
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/shares/tok123/privacy')
+      expect(init.method).toBe('PUT')
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
+      expect(body).toEqual({ private: true })
+    })
+
+    it('surfaces privacy errors', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Forbidden' }, false, 403))
+      await expect(setSharePrivacy('tok123', true)).rejects.toBeInstanceOf(ApiError)
     })
   })
 
   describe('createShare', () => {
-    it('posts share data to /api/shares and returns created share result', async () => {
+    it('posts the privacy flag to the exact share collection path', async () => {
       const payload = {
         token: 'tok123',
         kind: 'landing' as const,
         urls: { landing: 'https://zpan.io/s/tok123' },
         expiresAt: null,
         downloadLimit: null,
+        private: true,
       }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
-      const result = await createShare({ matterId: 'obj-1', kind: 'landing' })
+      const result = await createShare({ matterId: 'obj-1', kind: 'landing', private: true })
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/shares')
+      expect(url).toBe('/api/shares')
       expect(init.method).toBe('POST')
       const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body).toMatchObject({ matterId: 'obj-1', kind: 'landing' })
+      expect(body).toEqual({ matterId: 'obj-1', kind: 'landing', private: true })
       const headers =
         init.headers instanceof Headers ? init.headers : new Headers(init.headers as Record<string, string>)
       expect(headers.get('Content-Type')).toContain('application/json')
@@ -2109,7 +2819,7 @@ describe('api', () => {
 
   describe('listShareObjects', () => {
     it('calls GET /api/shares/:token/objects with default params', async () => {
-      const payload = { items: [], total: 0, page: 1, pageSize: 50, breadcrumb: [] }
+      const payload = { items: [], nextPageToken: null, breadcrumb: [] }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
       const result = await listShareObjects('tok123')
@@ -2117,20 +2827,18 @@ describe('api', () => {
       expect(result).toEqual(payload)
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
       expect(url).toContain('/api/shares/tok123/objects')
-      expect(url).toContain('page=1')
       expect(url).toContain('pageSize=50')
+      expect(url).not.toContain('pageToken=')
     })
 
-    it('passes custom parent, page, and pageSize', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(
-        makeResponse({ items: [], total: 0, page: 2, pageSize: 10, breadcrumb: [] }),
-      )
+    it('passes custom parent, pageToken, and pageSize', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], nextPageToken: null, breadcrumb: [] }))
 
-      await listShareObjects('tok123', 'Reports', 2, 10)
+      await listShareObjects('tok123', 'Reports', 'next-token', 10)
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
       expect(url).toContain('parent=Reports')
-      expect(url).toContain('page=2')
+      expect(url).toContain('pageToken=next-token')
       expect(url).toContain('pageSize=10')
     })
 
@@ -2138,6 +2846,26 @@ describe('api', () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Password required' }, false, 401))
 
       await expect(listShareObjects('tok123')).rejects.toThrow('Password required')
+    })
+  })
+
+  describe('getShareReadme', () => {
+    it('calls GET /api/shares/:token/readme and returns Markdown content', async () => {
+      const payload = { content: '# Shared folder' }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await getShareReadme('tok123')
+
+      expect(result).toEqual(payload)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/shares/tok123/readme')
+      expect(init.method).toBe('GET')
+    })
+
+    it('throws ApiError when README.md is missing', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'README.md not found' }, false, 404))
+
+      await expect(getShareReadme('tok123')).rejects.toThrow('README.md not found')
     })
   })
 
@@ -2161,14 +2889,33 @@ describe('api', () => {
       expect(JSON.parse(init.body as string)).toEqual({ targetOrgId: 'org-1', targetParent: 'Docs' })
     })
 
-    it('throws ApiError with QUOTA_EXCEEDED code on 400', async () => {
+    it('throws ApiError with QUOTA_EXCEEDED reason on 400', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(
-        makeResponse({ error: 'Quota exceeded', code: 'QUOTA_EXCEEDED' }, false, 400),
+        makeResponse(
+          {
+            error: {
+              code: 400,
+              message: 'Quota exceeded',
+              status: 'FAILED_PRECONDITION',
+              details: [
+                {
+                  '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+                  reason: 'QUOTA_EXCEEDED',
+                  domain: 'zpan.dev',
+                },
+              ],
+            },
+          },
+          false,
+          400,
+        ),
       )
 
-      await expect(saveShareToDrive('tok123', { targetOrgId: 'org-1', targetParent: '' })).rejects.toThrow(
-        'Quota exceeded',
-      )
+      await expect(saveShareToDrive('tok123', { targetOrgId: 'org-1', targetParent: '' })).rejects.toMatchObject({
+        name: 'ApiError',
+        status: 400,
+        reason: 'QUOTA_EXCEEDED',
+      })
     })
 
     it('throws ApiError on 401 (password required)', async () => {
@@ -2191,7 +2938,7 @@ describe('api', () => {
   })
 
   describe('getIhostConfig', () => {
-    it('calls GET /api/ihost/config and returns config when enabled', async () => {
+    it('calls GET /api/image-hosting/config and returns config when enabled', async () => {
       const payload = {
         enabled: true,
         customDomain: null,
@@ -2207,19 +2954,29 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/ihost/config')
+      expect(url).toContain('/api/image-hosting/config')
     })
 
-    it('returns null when feature is not enabled', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null))
+    it('returns the disabled shape when feature is not enabled', async () => {
+      const disabled = {
+        enabled: false,
+        customDomain: null,
+        domainVerifiedAt: null,
+        domainStatus: 'none',
+        dnsInstructions: null,
+        refererAllowlist: null,
+        createdAt: null,
+      }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(disabled))
 
       const result = await getIhostConfig()
 
-      expect(result).toBeNull()
+      expect(result).toEqual(disabled)
+      expect(result.enabled).toBe(false)
     })
 
     it('passes credentials: include', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null))
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ enabled: false }))
 
       await getIhostConfig()
 
@@ -2235,7 +2992,7 @@ describe('api', () => {
   })
 
   describe('enableIhostFeature', () => {
-    it('calls PUT /api/ihost/config with enabled: true and returns config', async () => {
+    it('calls PUT /api/image-hosting/config with enabled: true and returns config', async () => {
       const payload = {
         enabled: true,
         customDomain: null,
@@ -2251,7 +3008,7 @@ describe('api', () => {
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/ihost/config')
+      expect(url).toContain('/api/image-hosting/config')
       expect(init.method).toBe('PUT')
       expect(JSON.parse(init.body as string)).toEqual({ enabled: true })
     })
@@ -2305,7 +3062,7 @@ describe('api', () => {
       await updateIhostConfig({ customDomain: 'img.example.com' })
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/ihost/config')
+      expect(url).toContain('/api/image-hosting/config')
       expect(init.method).toBe('PUT')
       const body = JSON.parse(init.body as string)
       expect(body.enabled).toBe(true)
@@ -2338,13 +3095,13 @@ describe('api', () => {
   })
 
   describe('deleteIhostConfig', () => {
-    it('sends DELETE to /api/ihost/config', async () => {
+    it('sends DELETE to /api/image-hosting/config', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
 
       await deleteIhostConfig()
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/ihost/config')
+      expect(url).toContain('/api/image-hosting/config')
       expect(init.method).toBe('DELETE')
     })
 
@@ -2361,47 +3118,134 @@ describe('api', () => {
     })
   })
 
-  describe('listIhostApiKeys', () => {
+  describe('OAuth consent and grants', () => {
+    const sampleGrantList = {
+      items: [
+        {
+          id: 'grant-1',
+          clientId: 'dynamic-client',
+          clientName: 'ZPan Agent',
+          userId: 'user-1',
+          workspaces: [{ id: 'org-1', name: 'Personal' }],
+          scopes: ['objects:read'],
+          createdAt: '2026-07-29T00:00:00.000Z',
+          lastUsedAt: null,
+          status: 'active',
+        },
+      ],
+    }
+
+    it('loads server-owned OAuth consent context with the raw OAuth query', async () => {
+      const payload = {
+        clientId: 'dynamic-client',
+        clientName: 'ZPan Agent',
+        clientOrigin: 'http://127.0.0.1:8484',
+        workspaces: [{ id: 'org-1', name: 'Personal' }],
+        requestedWorkspaceIds: [],
+        scopes: ['objects:read'],
+        standardScopes: ['openid', 'offline_access'],
+        redirectUri: 'http://127.0.0.1:8484/callback',
+        grantLifetime: { accessTokenSeconds: 900, refreshTokenSeconds: 2_592_000 },
+      }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      const result = await getOAuthConsentContext('client_id=dynamic-client&scope=objects%3Aread')
+
+      expect(result).toEqual(payload)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/oauth-consent')
+      expect(url).toContain('oauthQuery=client_id%3Ddynamic-client%26scope%3Dobjects%253Aread')
+      expect(init.method).toBe('GET')
+    })
+
+    it('submits full OAuth consent through the Hono RPC wrapper without sending scope overrides', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ url: 'http://127.0.0.1:8484/callback?code=abc' }))
+
+      const result = await submitOAuthConsent({
+        accept: true,
+        oauthQuery: 'client_id=dynamic-client',
+        workspaceIds: ['org-1'],
+      })
+
+      expect(result).toEqual({ url: 'http://127.0.0.1:8484/callback?code=abc' })
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/oauth-consent')
+      expect(init.method).toBe('POST')
+      expect(init.credentials).toBe('include')
+      expect(JSON.parse(init.body as string)).toEqual({
+        accept: true,
+        oauthQuery: 'client_id=dynamic-client',
+        workspaceIds: ['org-1'],
+      })
+    })
+
+    it('throws an API error when OAuth consent submission is rejected with a non-JSON response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        statusText: 'Bad Request',
+        json: async () => {
+          throw new Error('not json')
+        },
+      } as unknown as Response)
+
+      await expect(
+        submitOAuthConsent({ accept: false, oauthQuery: 'client_id=dynamic-client', workspaceIds: [] }),
+      ).rejects.toThrow(ApiError)
+    })
+
+    it('lists delegated OAuth grants', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(sampleGrantList))
+
+      const result = await listOAuthGrants()
+
+      expect(result).toEqual(sampleGrantList)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/oauth-grants')
+      expect(init.method).toBe('GET')
+    })
+
+    it('revokes delegated OAuth grants with DELETE', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
+
+      await revokeOAuthGrant('grant-1')
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/oauth-grants/grant-1')
+      expect(init.method).toBe('DELETE')
+    })
+  })
+
+  describe('listApiKeys', () => {
     const sampleKey = {
       id: 'key-1',
+      configId: 'ihost',
       name: 'My Key',
       start: 'abc',
       prefix: null,
       createdAt: '2024-01-01T00:00:00.000Z',
       lastRequest: null,
-      permissions: { ihost: ['upload'] },
-      referenceId: 'org-1',
+      permissions: { images: ['upload'] },
+      metadata: { scope: { mode: 'workspace', orgId: 'org-1' } },
+      referenceId: 'user-1',
       enabled: true,
     }
 
-    it('calls GET /api/auth/api-key/list with organizationId', async () => {
+    it('lists every key owned by the current user without an organization filter', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ apiKeys: [sampleKey] }))
 
-      await listIhostApiKeys('org-1')
+      const result = await listApiKeys()
 
-      const [url] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/auth/api-key/list')
-      expect(url).toContain('organizationId=org-1')
-    })
-
-    it('filters to ihost:upload permission only', async () => {
-      const otherKey = {
-        ...sampleKey,
-        id: 'key-2',
-        permissions: { 'other-scope': ['read'] },
-      }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ apiKeys: [sampleKey, otherKey] }))
-
-      const result = await listIhostApiKeys('org-1')
-
-      expect(result).toHaveLength(1)
-      expect(result[0].id).toBe('key-1')
+      expect(result).toEqual([sampleKey])
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/auth/api-key/list')
+      expect(init.method).toBe('GET')
     })
 
     it('returns empty array when no matching keys', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ apiKeys: [] }))
 
-      const result = await listIhostApiKeys('org-1')
+      const result = await listApiKeys()
 
       expect(result).toEqual([])
     })
@@ -2409,7 +3253,7 @@ describe('api', () => {
     it('throws ApiError on failure', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Unauthorized' }, false, 401))
 
-      await expect(listIhostApiKeys('org-1')).rejects.toThrow('Unauthorized')
+      await expect(listApiKeys()).rejects.toThrow('Unauthorized')
     })
   })
 
@@ -2422,7 +3266,7 @@ describe('api', () => {
       prefix: null,
       createdAt: '2024-01-01T00:00:00.000Z',
       lastRequest: null,
-      permissions: { ihost: ['upload'] },
+      permissions: { images: ['upload'] },
       referenceId: 'org-1',
       enabled: true,
     }
@@ -2506,30 +3350,17 @@ describe('api', () => {
   describe('WebDAV app passwords', () => {
     const samplePassword = {
       id: 'webdav-key-1',
+      configId: 'webdav',
       name: 'Finder',
       start: 'zpan',
       prefix: null,
       createdAt: '2024-01-01T00:00:00.000Z',
       lastRequest: null,
-      permissions: { webdav: ['read', 'write'] },
+      permissions: { objects: ['read', 'create', 'update', 'delete', 'move'] },
+      metadata: { scope: { mode: 'user-workspaces' } },
       referenceId: 'user-1',
       enabled: true,
     }
-
-    it('lists only webdav app passwords', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(
-        makeResponse({
-          apiKeys: [samplePassword, { ...samplePassword, id: 'other', permissions: { other: ['read'] } }],
-        }),
-      )
-
-      const result = await listWebDavAppPasswords()
-
-      expect(result).toEqual([samplePassword])
-      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/auth/api-key/list?configId=webdav')
-      expect(init.method).toBe('GET')
-    })
 
     it('creates a webdav app password with configId', async () => {
       const created = { ...samplePassword, key: 'webdav-secret' }
@@ -2555,41 +3386,22 @@ describe('api', () => {
       expect(init.method).toBe('POST')
       expect(JSON.parse(init.body as string)).toEqual({ configId: 'webdav', keyId: 'webdav-key-1' })
     })
-
-    it('throws ApiError on webdav app password failure', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Unauthorized' }, false, 401))
-
-      await expect(listWebDavAppPasswords()).rejects.toThrow('Unauthorized')
-    })
   })
 
   describe('Remote download API keys', () => {
     const sampleKey = {
       id: 'remote-key-1',
+      configId: 'remote-download',
       name: 'Remote Download',
       start: 'zpan',
       prefix: null,
       createdAt: '2024-01-01T00:00:00.000Z',
       lastRequest: null,
-      permissions: { remoteDownload: ['read', 'create', 'cancel'] },
-      referenceId: 'org-1',
+      permissions: { 'download-tasks': ['read', 'create', 'cancel'] },
+      metadata: { scope: { mode: 'workspace', orgId: 'org-1' } },
+      referenceId: 'user-1',
       enabled: true,
     }
-
-    it('lists only remote-download API keys', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(
-        makeResponse({
-          apiKeys: [sampleKey, { ...sampleKey, id: 'other', permissions: { ihost: ['upload'] } }],
-        }),
-      )
-
-      const result = await listRemoteDownloadApiKeys('org-1')
-
-      expect(result).toEqual([sampleKey])
-      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/auth/api-key/list?organizationId=org-1&configId=remote-download')
-      expect(init.method).toBe('GET')
-    })
 
     it('creates a remote-download API key with configId', async () => {
       const created = { ...sampleKey, key: 'remote-secret' }
@@ -2619,37 +3431,31 @@ describe('api', () => {
       expect(init.method).toBe('POST')
       expect(JSON.parse(init.body as string)).toEqual({ configId: 'remote-download', keyId: 'remote-key-1' })
     })
-
-    it('throws ApiError on remote-download API key failure', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Unauthorized' }, false, 401))
-
-      await expect(listRemoteDownloadApiKeys('org-1')).rejects.toThrow('Unauthorized')
-    })
   })
 
   describe('listIhostImages', () => {
-    it('calls GET /api/ihost/images', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], nextCursor: null }))
+    it('calls GET /api/image-hosting/images', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], nextPageToken: null }))
 
       await listIhostImages()
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/ihost/images')
+      expect(url).toContain('/api/image-hosting/images')
     })
 
-    it('passes pathPrefix, cursor, and limit as query params', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], nextCursor: null }))
+    it('passes pathPrefix, page token, and page size as query params', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], nextPageToken: null }))
 
-      await listIhostImages({ pathPrefix: 'foo/', cursor: 'abc', limit: 20 })
+      await listIhostImages({ pathPrefix: 'foo/', pageToken: 'abc', pageSize: 20 })
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
       expect(url).toContain('pathPrefix=foo%2F')
-      expect(url).toContain('cursor=abc')
-      expect(url).toContain('limit=20')
+      expect(url).toContain('pageToken=abc')
+      expect(url).toContain('pageSize=20')
     })
 
-    it('resolves with items and nextCursor', async () => {
-      const payload = { items: [{ id: 'img-1' }], nextCursor: 'next' }
+    it('resolves with items and nextPageToken', async () => {
+      const payload = { items: [{ id: 'img-1' }], nextPageToken: 'next' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
       const result = await listIhostImages()
@@ -2665,10 +3471,10 @@ describe('api', () => {
   })
 
   describe('createIhostImagePresign', () => {
-    it('calls POST /api/ihost/images/presign with JSON body', async () => {
+    it('calls POST /api/image-hosting/images/presign with JSON body', async () => {
       const draft = {
         id: 'd1',
-        token: 'ih_abc',
+        token: 'iImageTok001',
         path: 'foo/bar.png',
         uploadUrl: 'https://s3/...',
         storageKey: 'ih/...',
@@ -2678,7 +3484,7 @@ describe('api', () => {
       await createIhostImagePresign({ path: 'foo/bar.png', mime: 'image/png', size: 1024 })
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/ihost/images/presign')
+      expect(url).toContain('/api/image-hosting/images/presign')
       expect(init.method).toBe('POST')
       const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
       expect(body?.path).toBe('foo/bar.png')
@@ -2689,7 +3495,7 @@ describe('api', () => {
     it('resolves with draft object', async () => {
       const draft = {
         id: 'd1',
-        token: 'ih_abc',
+        token: 'iImageTok001',
         path: 'foo/bar.png',
         uploadUrl: 'https://s3/...',
         storageKey: 'ih/...',
@@ -2711,21 +3517,19 @@ describe('api', () => {
   })
 
   describe('confirmIhostImage', () => {
-    it('calls PATCH /api/ihost/images/:id with action confirm', async () => {
+    it('calls PUT /api/image-hosting/images/:id/status', async () => {
       const image = { id: 'img-1', status: 'active' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(image))
 
       await confirmIhostImage('img-1')
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/ihost/images/img-1')
-      expect(init.method).toBe('PATCH')
-      const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
-      expect(body?.action).toBe('confirm')
+      expect(url).toBe('/api/image-hosting/images/img-1/status')
+      expect(init.method).toBe('PUT')
     })
 
     it('resolves with confirmed image', async () => {
-      const image = { id: 'img-1', status: 'active', token: 'ih_x' }
+      const image = { id: 'img-1', status: 'active', token: 'iImageTok00X' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(image))
 
       const result = await confirmIhostImage('img-1')
@@ -2741,13 +3545,13 @@ describe('api', () => {
   })
 
   describe('deleteIhostImage', () => {
-    it('calls DELETE /api/ihost/images/:id', async () => {
+    it('calls DELETE /api/image-hosting/images/:id', async () => {
       vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 204, json: async () => null } as unknown as Response)
 
       await deleteIhostImage('img-1')
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/ihost/images/img-1')
+      expect(url).toContain('/api/image-hosting/images/img-1')
       expect(init.method).toBe('DELETE')
     })
 
@@ -2759,14 +3563,14 @@ describe('api', () => {
   })
 
   describe('uploadAvatar', () => {
-    it('PUTs multipart/form-data to /api/me/avatar with file field', async () => {
+    it('PUTs multipart/form-data to /api/users/me/avatar with file field', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ url: 'https://example.com/a.png' }, true, 200))
       const file = new File(['x'], 'a.png', { type: 'image/png' })
 
       await uploadAvatar(file)
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('/api/me/avatar')
+      expect(url).toBe('/api/users/me/avatar')
       expect(init.method).toBe('PUT')
       expect(init.body).toBeInstanceOf(FormData)
       expect((init.body as FormData).get('file')).toBe(file)
@@ -2790,12 +3594,12 @@ describe('api', () => {
   })
 
   describe('deleteAvatar', () => {
-    it('DELETEs /api/me/avatar', async () => {
+    it('DELETEs /api/users/me/avatar', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ ok: true }, true, 200))
       await deleteAvatar()
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/me/avatar')
+      expect(url).toContain('/api/users/me/avatar')
       expect(init.method).toBe('DELETE')
     })
 
@@ -2859,7 +3663,7 @@ describe('api', () => {
       await getLicensingStatus()
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/licensing/status')
+      expect(url).toContain('/api/site/licensing/binding')
     })
 
     it('returns unbound state', async () => {
@@ -2893,6 +3697,24 @@ describe('api', () => {
     })
   })
 
+  describe('getLicenseEntitlements', () => {
+    it('GETs the authenticated entitlement projection', async () => {
+      const payload = { bound: false, active: false, edition: null, features: [] }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      await expect(getLicenseEntitlements()).resolves.toEqual(payload)
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/site/licensing/entitlements')
+      expect(init.method).toBe('GET')
+    })
+
+    it('throws ApiError on failure', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Unauthorized' }, false, 401))
+      await expect(getLicenseEntitlements()).rejects.toThrow('Unauthorized')
+    })
+  })
+
   describe('getInstanceInfo', () => {
     const instance = {
       id: 'inst-123',
@@ -2911,7 +3733,7 @@ describe('api', () => {
       await getInstanceInfo()
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/system/instance')
+      expect(url).toContain('/api/site/instance')
       expect(init?.method ?? 'GET').toBe('GET')
     })
 
@@ -2944,7 +3766,7 @@ describe('api', () => {
       await getChangelog()
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/system/changelog')
+      expect(url).toContain('/api/site/changelog')
       expect(init?.method ?? 'GET').toBe('GET')
     })
 
@@ -2962,7 +3784,7 @@ describe('api', () => {
       await getChangelog({ refresh: true })
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/system/changelog')
+      expect(url).toContain('/api/site/changelog')
       expect(url).toContain('refresh=true')
     })
 
@@ -2985,7 +3807,7 @@ describe('api', () => {
       await connectCloud()
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/licensing/pair')
+      expect(url).toContain('/api/site/licensing/pairings')
       expect(init.method).toBe('POST')
     })
 
@@ -3016,7 +3838,7 @@ describe('api', () => {
       await pollPairing('ABC-123')
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/licensing/pair/ABC-123/poll')
+      expect(url).toContain('/api/site/licensing/pairings/ABC-123')
     })
 
     it('returns pending status', async () => {
@@ -3050,7 +3872,7 @@ describe('api', () => {
       await refreshLicense()
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/licensing/refresh')
+      expect(url).toContain('/api/site/licensing/refresh-runs')
       expect(init.method).toBe('POST')
     })
 
@@ -3072,21 +3894,19 @@ describe('api', () => {
 
   describe('disconnectCloud', () => {
     it('calls the correct endpoint with DELETE', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ deleted: true }))
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
 
       await disconnectCloud()
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/licensing/binding')
+      expect(url).toContain('/api/site/licensing/binding')
       expect(init.method).toBe('DELETE')
     })
 
-    it('returns deleted: true on success', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ deleted: true }))
+    it('resolves on 204', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
 
-      const result = await disconnectCloud()
-
-      expect(result).toEqual({ deleted: true })
+      await expect(disconnectCloud()).resolves.toBeUndefined()
     })
 
     it('throws ApiError on failure', async () => {
@@ -3096,50 +3916,8 @@ describe('api', () => {
     })
   })
 
-  describe('getBranding', () => {
-    it('calls GET /api/branding and returns config', async () => {
-      const payload = {
-        logo_url: null,
-        favicon_url: null,
-        wordmark_text: null,
-        hide_powered_by: false,
-        theme: { mode: 'preset', preset: 'default', custom: null, configured: false },
-      }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
-
-      const result = await getBranding()
-
-      expect(result).toEqual(payload)
-      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/branding')
-    })
-
-    it('resolves with stored branding values', async () => {
-      const payload = {
-        logo_url: 'https://cdn.example.com/logo.svg',
-        favicon_url: null,
-        wordmark_text: 'MyCloud',
-        hide_powered_by: true,
-        theme: { mode: 'preset', preset: 'forest', custom: null, configured: true },
-      }
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
-
-      const result = await getBranding()
-
-      expect(result.logo_url).toBe('https://cdn.example.com/logo.svg')
-      expect(result.wordmark_text).toBe('MyCloud')
-      expect(result.hide_powered_by).toBe(true)
-    })
-
-    it('throws ApiError on non-ok response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Internal error' }, false, 500))
-
-      await expect(getBranding()).rejects.toThrow('Internal error')
-    })
-  })
-
   describe('saveBranding', () => {
-    it('sends PUT /api/admin/branding as multipart', async () => {
+    it('sends PUT /api/site/settings/branding as multipart', async () => {
       const payload = {
         logo_url: null,
         favicon_url: null,
@@ -3152,7 +3930,7 @@ describe('api', () => {
       await saveBranding({ wordmark_text: 'MyCloud' })
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/branding')
+      expect(url).toContain('/api/site/settings/branding')
       expect(init.method).toBe('PUT')
       expect(init.body).toBeInstanceOf(FormData)
     })
@@ -3197,7 +3975,7 @@ describe('api', () => {
 
     it('includes only logo file fields in FormData when provided', async () => {
       const payload = {
-        logo_url: 'https://cdn/logo.png',
+        logo_url: 'data:image/png;base64,cG5nLWRhdGE=',
         favicon_url: null,
         wordmark_text: null,
         hide_powered_by: false,
@@ -3250,13 +4028,13 @@ describe('api', () => {
   })
 
   describe('resetBrandingField', () => {
-    it('sends DELETE /api/admin/branding/:field', async () => {
+    it('sends DELETE /api/site/settings/branding/:field', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ field: 'logo', reset: true }))
 
       await resetBrandingField('logo')
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/branding/logo')
+      expect(url).toContain('/api/site/settings/branding/logo')
       expect(init.method).toBe('DELETE')
     })
 
@@ -3269,25 +4047,35 @@ describe('api', () => {
 
   describe('email config API', () => {
     it('getEmailConfig fetches admin email config', async () => {
-      const payload = { enabled: true, provider: 'cloudflare', from: 'no-reply@zpan.space' }
+      const payload = {
+        enabled: true,
+        requireEmailVerification: true,
+        provider: 'cloudflare',
+        from: 'no-reply@zpan.space',
+      }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
       const result = await getEmailConfig()
 
       expect(result).toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/email-config')
+      expect(url).toContain('/api/site/settings/email')
       expect(init.method).toBe('GET')
     })
 
     it('saveEmailConfig PUTs the expected payload', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ success: true }))
 
-      const payload = { enabled: true, provider: 'cloudflare' as const, from: 'no-reply@zpan.space' }
+      const payload = {
+        enabled: true,
+        requireEmailVerification: true,
+        provider: 'cloudflare' as const,
+        from: 'no-reply@zpan.space',
+      }
       await saveEmailConfig(payload)
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/email-config')
+      expect(url).toContain('/api/site/settings/email')
       expect(init.method).toBe('PUT')
       expect(init.body).toBe(JSON.stringify(payload))
     })
@@ -3296,7 +4084,12 @@ describe('api', () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'bad config' }, false, 400))
 
       await expect(
-        saveEmailConfig({ enabled: true, provider: 'cloudflare', from: 'no-reply@zpan.space' }),
+        saveEmailConfig({
+          enabled: true,
+          requireEmailVerification: false,
+          provider: 'cloudflare',
+          from: 'no-reply@zpan.space',
+        }),
       ).rejects.toThrow('bad config')
     })
 
@@ -3306,7 +4099,7 @@ describe('api', () => {
       await testEmail('user@example.com')
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/admin/email-config/test-messages')
+      expect(url).toContain('/api/site/settings/email/test-messages')
       expect(init.method).toBe('POST')
       expect(init.body).toBe(JSON.stringify({ to: 'user@example.com' }))
     })
@@ -3315,6 +4108,167 @@ describe('api', () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'send failed' }, false, 400))
 
       await expect(testEmail('user@example.com')).rejects.toThrow('send failed')
+    })
+  })
+
+  describe('image domain provider API', () => {
+    it('gets the masked provider configuration', async () => {
+      const payload = {
+        settings: {
+          enabled: true,
+          provider: 'cloudflare_saas',
+          cloudflare: {
+            apiToken: '****oken',
+            zoneId: 'zone-1',
+            routingMode: 'worker',
+            workerName: 'zpan',
+            cnameTarget: 'ssl.example.com',
+          },
+        },
+        status: 'ready',
+        lastTestedAt: '2026-07-27T12:00:00.000Z',
+        error: null,
+      }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
+
+      await expect(getImageDomainProvider()).resolves.toEqual(payload)
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/site/settings/image-domains')
+      expect(init.method).toBe('GET')
+    })
+
+    it('saves the complete manual provider payload', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ success: true }))
+      const payload = {
+        enabled: true,
+        provider: 'manual' as const,
+        manual: { records: [{ type: 'A' as const, value: '192.0.2.10' }] },
+      }
+
+      await saveImageDomainProvider(payload)
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/site/settings/image-domains')
+      expect(init.method).toBe('PUT')
+      expect(init.body).toBe(JSON.stringify(payload))
+    })
+
+    it('surfaces save failures as ApiError', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'invalid provider' }, false, 400))
+      await expect(
+        saveImageDomainProvider({
+          enabled: true,
+          provider: 'manual',
+          manual: { records: [{ type: 'CNAME', value: 'ssl.example.com' }] },
+        }),
+      ).rejects.toThrow('invalid provider')
+    })
+
+    it('tests the saved provider through the tests resource', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ success: true }))
+      await testImageDomainProvider()
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/site/settings/image-domains/tests')
+      expect(init.method).toBe('POST')
+    })
+
+    it('surfaces provider test failures as ApiError', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'fallback origin inactive' }, false, 400))
+      await expect(testImageDomainProvider()).rejects.toThrow('fallback origin inactive')
+    })
+  })
+
+  describe('site stats API', () => {
+    const dashboardPayload = {
+      generatedAt: '2026-07-09T00:00:00.000Z',
+      from: '2026-07-01T00:00:00.000Z',
+      to: '2026-07-09T00:00:00.000Z',
+    }
+    const range = {
+      from: '2026-07-01T00:00:00.000Z',
+      to: '2026-07-09T00:00:00.000Z',
+      timeZone: 'UTC' as const,
+    }
+    const dashboardEndpoints = [
+      {
+        name: 'getAdminDashboardOverviewStats',
+        path: '/api/site/analytics/overview',
+        fn: getAdminDashboardOverviewStats,
+      },
+      {
+        name: 'getAdminDashboardOperationsStats',
+        path: '/api/site/analytics/operations',
+        fn: getAdminDashboardOperationsStats,
+      },
+      { name: 'getAdminDashboardGrowthStats', path: '/api/site/analytics/growth', fn: getAdminDashboardGrowthStats },
+      { name: 'getAdminDashboardStorageStats', path: '/api/site/analytics/storage', fn: getAdminDashboardStorageStats },
+      { name: 'getAdminDashboardTrafficStats', path: '/api/site/analytics/traffic', fn: getAdminDashboardTrafficStats },
+      { name: 'getAdminDashboardSharingStats', path: '/api/site/analytics/sharing', fn: getAdminDashboardSharingStats },
+    ] as const
+
+    for (const endpoint of dashboardEndpoints) {
+      it(`${endpoint.name} fetches dashboard stats with from/to`, async () => {
+        vi.mocked(fetch).mockResolvedValueOnce(makeResponse(dashboardPayload))
+
+        const result = await endpoint.fn(range)
+
+        expect(result).toEqual(dashboardPayload)
+        const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+        expect(url).toContain(endpoint.path)
+        expect(decodeURIComponent(url)).toContain(`from=${range.from}`)
+        expect(decodeURIComponent(url)).toContain(`to=${range.to}`)
+        expect(decodeURIComponent(url)).toContain(`timeZone=${range.timeZone}`)
+        expect(init.method).toBe('GET')
+      })
+
+      it(`${endpoint.name} throws ApiError on failure`, async () => {
+        vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Feature not available' }, false, 402))
+
+        await expect(endpoint.fn(range)).rejects.toMatchObject({ status: 402 })
+      })
+    }
+  })
+
+  describe('admin runtime overview API', () => {
+    const overview = {
+      observedAt: '2026-07-20T18:00:00.000Z',
+      status: 'healthy',
+      alerts: [],
+      storages: { total: 1, writable: 1, items: [] },
+      downloaders: {
+        total: 1,
+        online: 1,
+        activeTasks: 0,
+        totalSlots: 2,
+        availableSlots: 2,
+        downloadBps: 0,
+        uploadBps: 0,
+        items: [],
+      },
+      queue: { waiting: 0, oldestCreatedAt: null },
+      license: {
+        bound: false,
+        active: false,
+        lastRefreshAt: null,
+        lastRefreshError: null,
+        certificateExpiresAt: null,
+      },
+    }
+
+    it('GETs the type-safe site overview resource', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(overview))
+
+      await expect(getAdminOverview()).resolves.toEqual(overview)
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/site/analytics')
+      expect(init.method).toBe('GET')
+    })
+
+    it('throws ApiError when the overview request fails', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'overview failed' }, false, 500))
+
+      await expect(getAdminOverview()).rejects.toMatchObject({ status: 500 })
     })
   })
 
@@ -3339,7 +4293,7 @@ describe('api', () => {
       await listAdminAuditLogs()
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('/api/admin/audit')
+      expect(url).toContain('/api/site/audit-events')
       expect(url).toContain('page=1')
       expect(url).toContain('pageSize=20')
     })
@@ -3347,7 +4301,14 @@ describe('api', () => {
     it('includes optional filters in query', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], total: 0, page: 1, pageSize: 20 }))
 
-      await listAdminAuditLogs(2, 10, { orgId: 'org-1', userId: 'user-1', action: 'upload', targetType: 'file' })
+      await listAdminAuditLogs(2, 10, {
+        orgId: 'org-1',
+        userId: 'user-1',
+        action: 'upload',
+        targetType: 'file',
+        createdFrom: '2026-01-01T00:00:00.000Z',
+        createdTo: '2026-02-01T00:00:00.000Z',
+      })
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
       expect(url).toContain('page=2')
@@ -3356,6 +4317,8 @@ describe('api', () => {
       expect(url).toContain('userId=user-1')
       expect(url).toContain('action=upload')
       expect(url).toContain('targetType=file')
+      expect(url).toContain('createdFrom=2026-01-01T00%3A00%3A00.000Z')
+      expect(url).toContain('createdTo=2026-02-01T00%3A00%3A00.000Z')
     })
 
     it('returns parsed paginated response', async () => {
@@ -3379,6 +4342,166 @@ describe('api', () => {
       )
 
       await expect(listAdminAuditLogs()).rejects.toMatchObject({ status: 402 })
+    })
+  })
+
+  describe('listObjectsByPath', () => {
+    it('sends path and optional filters as query params', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], nextPageToken: null }))
+
+      await listObjectsByPath('a/b', 'page-token', 50, { type: 'dir', search: 'doc', orgId: 'org-1' })
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/objects?')
+      expect(url).toContain('path=a%2Fb')
+      expect(url).toContain('pageToken=page-token')
+      expect(url).toContain('pageSize=50')
+      expect(url).toContain('type=dir')
+      expect(url).toContain('search=doc')
+      expect(url).toContain('orgId=org-1')
+      expect(init.method).toBe('GET')
+    })
+
+    it('omits absent optional filters', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], nextPageToken: null }))
+
+      await listObjectsByPath('root')
+
+      const [url] = vi.mocked(fetch).mock.calls[0] as [string]
+      expect(url).not.toContain('type=')
+      expect(url).not.toContain('search=')
+      expect(url).not.toContain('orgId=')
+    })
+
+    it('throws ApiError on failure', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
+
+      await expect(listObjectsByPath('root')).rejects.toThrow('forbidden')
+    })
+  })
+
+  describe('isNameConflictError', () => {
+    const errorBody = (reason: string, metadata?: Record<string, string>) => ({
+      error: {
+        code: 409,
+        message: 'Name already exists',
+        status: 'ALREADY_EXISTS',
+        details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason, domain: 'zpan.dev', metadata }],
+      },
+    })
+
+    it('returns true only for 409 NAME_CONFLICT ApiErrors', () => {
+      const conflict = new ApiError(409, errorBody('NAME_CONFLICT', { conflictingName: 'a', conflictingId: 'id1' }))
+      expect(isNameConflictError(conflict)).toBe(true)
+      expect(conflict.metadata).toEqual({ conflictingName: 'a', conflictingId: 'id1' })
+      expect(conflict.reason).toBe('NAME_CONFLICT')
+    })
+
+    it('returns false for other ApiErrors and non-errors', () => {
+      expect(isNameConflictError(new ApiError(409, errorBody('OTHER')))).toBe(false)
+      expect(isNameConflictError(new ApiError(404, errorBody('NAME_CONFLICT')))).toBe(false)
+      expect(isNameConflictError(new Error('nope'))).toBe(false)
+      expect(isNameConflictError(null)).toBe(false)
+    })
+  })
+
+  describe('admin auth providers api', () => {
+    it('upserts an auth provider', async () => {
+      const data = { enabled: true, clientId: 'cid', clientSecret: 'secret' }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ providerId: 'google', ...data }))
+
+      await upsertAuthProvider('google', data as never)
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/site/auth-providers/google')
+      expect(init.method).toBe('PUT')
+      expect(init.body).toBe(JSON.stringify(data))
+    })
+
+    it('deletes an auth provider (resolves on 204)', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
+
+      await expect(deleteAuthProvider('google')).resolves.toBeUndefined()
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/site/auth-providers/google')
+      expect(init.method).toBe('DELETE')
+    })
+
+    it('throws ApiError on failure', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
+
+      await expect(upsertAuthProvider('google', {} as never)).rejects.toThrow('forbidden')
+    })
+  })
+
+  describe('invite codes api', () => {
+    it('lists invite codes with pagination', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], total: 0 }))
+
+      await listInviteCodes(3, 25)
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/site/invite-codes?')
+      expect(url).toContain('page=3')
+      expect(url).toContain('pageSize=25')
+      expect(init.method).toBe('GET')
+    })
+
+    it('generates invite codes with count only', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ codes: [] }))
+
+      await generateInviteCodes(5)
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/site/invite-codes')
+      expect(init.method).toBe('POST')
+      expect(init.body).toBe(JSON.stringify({ count: 5 }))
+    })
+
+    it('includes expiresInDays when provided', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ codes: [] }))
+
+      await generateInviteCodes(2, 7)
+
+      const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(init.body).toBe(JSON.stringify({ count: 2, expiresInDays: 7 }))
+    })
+
+    it('deletes an invite code (resolves on 204)', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(null, true, 204))
+
+      await expect(deleteInviteCode('code-1')).resolves.toBeUndefined()
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/site/invite-codes/code-1')
+      expect(init.method).toBe('DELETE')
+    })
+
+    it('throws ApiError on failure', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
+
+      await expect(generateInviteCodes(1)).rejects.toThrow('forbidden')
+    })
+  })
+
+  describe('listTeamActivities', () => {
+    it('fetches team activity with pagination', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ items: [], total: 0, page: 1, pageSize: 20 }))
+
+      await listTeamActivities('team-1', 2, 15)
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/teams/team-1/activity?')
+      expect(url).toContain('page=2')
+      expect(url).toContain('pageSize=15')
+      expect(init.method).toBe('GET')
+    })
+
+    it('throws ApiError on failure', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'forbidden' }, false, 403))
+
+      await expect(listTeamActivities('team-1')).rejects.toThrow('forbidden')
     })
   })
 })

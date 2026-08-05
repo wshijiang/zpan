@@ -6,6 +6,7 @@ import {
   createStorageSchema,
   signInSchema,
   signUpSchema,
+  updateImageDomainSettingsSchema,
   updateMatterSchema,
 } from './index.js'
 
@@ -45,8 +46,6 @@ describe('signUpSchema', () => {
 
 describe('createStorageSchema', () => {
   const valid = {
-    title: 'My S3',
-    mode: 'private' as const,
     bucket: 'my-bucket',
     endpoint: 'https://s3.amazonaws.com',
     accessKey: 'AK',
@@ -59,11 +58,6 @@ describe('createStorageSchema', () => {
     if (result.success) {
       expect(result.data.region).toBe('auto')
     }
-  })
-
-  it('rejects invalid mode', () => {
-    const result = createStorageSchema.safeParse({ ...valid, mode: 'shared' })
-    expect(result.success).toBe(false)
   })
 
   it('rejects invalid endpoint URL', () => {
@@ -79,6 +73,20 @@ describe('createMatterSchema', () => {
     if (result.success) {
       expect(result.data.parent).toBe('')
       expect(result.data.dirtype).toBe(0)
+    }
+  })
+
+  it('accepts a missing optional content type', () => {
+    const result = createMatterSchema.safeParse({ name: 'unknown.bin' })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.type).toBeUndefined()
+  })
+
+  it('accepts an optional target storage id', () => {
+    const result = createMatterSchema.safeParse({ name: 'file.txt', type: 'text/plain', storageId: 'st-1' })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.storageId).toBe('st-1')
     }
   })
 
@@ -145,6 +153,81 @@ describe('createDownloadTaskSchema', () => {
       targetFolder: 'media/../private',
     })
 
+    expect(result.success).toBe(false)
+  })
+})
+
+describe('updateImageDomainSettingsSchema', () => {
+  it('accepts complete Cloudflare automation settings', () => {
+    const result = updateImageDomainSettingsSchema.safeParse({
+      enabled: true,
+      provider: 'cloudflare_saas',
+      cloudflare: {
+        apiToken: 'token',
+        zoneId: '0123456789abcdef0123456789abcdef',
+        routingMode: 'worker',
+        workerName: 'zpan',
+        cnameTarget: 'images.example.com',
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts a Cloudflare external origin without a Worker name', () => {
+    const result = updateImageDomainSettingsSchema.safeParse({
+      enabled: true,
+      provider: 'cloudflare_saas',
+      cloudflare: {
+        apiToken: 'token',
+        zoneId: '0123456789abcdef0123456789abcdef',
+        routingMode: 'origin',
+        originHostname: 'origin.example.com',
+        cnameTarget: 'images.example.com',
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts CNAME, IPv4, and IPv6 records', () => {
+    const result = updateImageDomainSettingsSchema.safeParse({
+      enabled: true,
+      provider: 'manual',
+      manual: {
+        records: [
+          { type: 'CNAME', value: 'images.example.com' },
+          { type: 'A', value: '192.0.2.10' },
+          { type: 'AAAA', value: '2001:db8::10' },
+        ],
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it.each([
+    ['CNAME', 'https://images.example.com'],
+    ['A', '999.0.2.10'],
+    ['AAAA', 'not-an-ip'],
+  ])('rejects an invalid %s record', (type, value) => {
+    const result = updateImageDomainSettingsSchema.safeParse({
+      enabled: true,
+      provider: 'manual',
+      manual: { records: [{ type, value }] },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('requires a real Cloudflare zone id', () => {
+    const result = updateImageDomainSettingsSchema.safeParse({
+      enabled: true,
+      provider: 'cloudflare_saas',
+      cloudflare: {
+        apiToken: 'token',
+        zoneId: 'zone-1',
+        routingMode: 'worker',
+        workerName: 'zpan',
+        cnameTarget: 'ssl.example.com',
+      },
+    })
     expect(result.success).toBe(false)
   })
 })

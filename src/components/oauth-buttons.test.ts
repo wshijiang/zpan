@@ -1,7 +1,8 @@
 import { BUILTIN_PROVIDER_IDS, OAuthProviderMeta } from '@shared/oauth-providers'
+import type { SiteConfig } from '@shared/schemas'
 import { describe, expect, it } from 'vitest'
 import { hasOAuthProviderIcon } from '@/components/oauth-provider-icon'
-import type { AuthProvider } from '@/lib/api'
+import { absoluteAuthCallbackURL } from '@/lib/auth-callback'
 
 // OAuthButtons is a React rendering component. The project has no jsdom or
 // @testing-library/react setup, so we cannot render it here.
@@ -15,13 +16,25 @@ import type { AuthProvider } from '@/lib/api'
 //   if (isLoading || providers.length === 0) return null
 // ---------------------------------------------------------------------------
 
-function shouldRender(isLoading: boolean, providers: AuthProvider[]): boolean {
+type PublicProvider = SiteConfig['auth']['providers'][number]
+
+function shouldRender(isLoading: boolean, providers: PublicProvider[]): boolean {
   return !isLoading && providers.length > 0
+}
+
+// Front-of-house provider shape: display fields populated, secrets nulled.
+function makeProvider(id: string, name: string): PublicProvider {
+  return {
+    id,
+    type: 'builtin',
+    name,
+    icon: id,
+  }
 }
 
 describe('OAuthButtons — render visibility logic', () => {
   it('returns false (renders null) when loading', () => {
-    const providers: AuthProvider[] = [{ providerId: 'github', type: 'oauth', name: 'GitHub', icon: '' }]
+    const providers: PublicProvider[] = [makeProvider('github', 'GitHub')]
 
     expect(shouldRender(true, providers)).toBe(false)
   })
@@ -35,16 +48,13 @@ describe('OAuthButtons — render visibility logic', () => {
   })
 
   it('returns true (renders buttons) when not loading and providers exist', () => {
-    const providers: AuthProvider[] = [{ providerId: 'github', type: 'oauth', name: 'GitHub', icon: '' }]
+    const providers: PublicProvider[] = [makeProvider('github', 'GitHub')]
 
     expect(shouldRender(false, providers)).toBe(true)
   })
 
   it('returns true when multiple providers are present', () => {
-    const providers: AuthProvider[] = [
-      { providerId: 'github', type: 'oauth', name: 'GitHub', icon: '' },
-      { providerId: 'google', type: 'oauth', name: 'Google', icon: '' },
-    ]
+    const providers: PublicProvider[] = [makeProvider('github', 'GitHub'), makeProvider('google', 'Google')]
 
     expect(shouldRender(false, providers)).toBe(true)
   })
@@ -54,15 +64,11 @@ describe('OAuthButtons — render visibility logic', () => {
 // Provider data contract — shape expected from listAuthProviders
 // ---------------------------------------------------------------------------
 
-function makeProvider(providerId: string, name: string): AuthProvider {
-  return { providerId, type: 'oauth', name, icon: providerId }
-}
-
 describe('OAuthButtons — provider data contract', () => {
-  it('provider has a providerId field used as the key and social sign-in provider', () => {
+  it('provider has an id field used as the key and social sign-in provider', () => {
     const p = makeProvider('github', 'GitHub')
 
-    expect(p.providerId).toBe('github')
+    expect(p.id).toBe('github')
   })
 
   it('provider has a name field used in the button label', () => {
@@ -77,25 +83,34 @@ describe('OAuthButtons — provider data contract', () => {
     expect(p.icon).toBe('github')
   })
 
-  it('each provider produces a distinct button key via providerId', () => {
+  it('each provider produces a distinct button key via id', () => {
     const providers = [makeProvider('github', 'GitHub'), makeProvider('google', 'Google')]
 
-    const keys = providers.map((p) => p.providerId)
+    const keys = providers.map((p) => p.id)
     expect(new Set(keys).size).toBe(providers.length)
   })
 })
 
 // ---------------------------------------------------------------------------
-// OAuth sign-in handler — callbackURL is always '/files'
+// OAuth sign-in handler — callbackURL defaults to the current origin's /files and can continue
+// an authorization request supplied by the sign-in page.
 // ---------------------------------------------------------------------------
 
-function buildOAuthCallbackUrl(): string {
-  return '/files'
+const PREVIEW_ORIGIN = 'https://feat-x402-paid-agent-uploads-zpan.saltbo.workers.dev'
+
+function buildOAuthCallbackUrl(callbackURL = '/files'): string {
+  return absoluteAuthCallbackURL(callbackURL, PREVIEW_ORIGIN)
 }
 
 describe('OAuthButtons — OAuth callback URL', () => {
-  it('OAuth sign-in callback URL is "/files"', () => {
-    expect(buildOAuthCallbackUrl()).toBe('/files')
+  it('defaults the OAuth sign-in callback URL to the absolute current-origin files URL', () => {
+    expect(buildOAuthCallbackUrl()).toBe(`${PREVIEW_ORIGIN}/files`)
+  })
+
+  it('uses the supplied authorization continuation', () => {
+    expect(buildOAuthCallbackUrl('/api/auth/oauth2/authorize?state=oauth-state')).toBe(
+      `${PREVIEW_ORIGIN}/api/auth/oauth2/authorize?state=oauth-state`,
+    )
   })
 })
 
@@ -115,11 +130,11 @@ describe('OAuthButtons — query staleTime', () => {
 // Query key contract
 // ---------------------------------------------------------------------------
 
-const AUTH_PROVIDERS_QUERY_KEY = ['auth-providers']
+const AUTH_PROVIDERS_QUERY_KEY = ['site', 'config']
 
 describe('OAuthButtons — query key', () => {
-  it('query key is ["auth-providers"]', () => {
-    expect(AUTH_PROVIDERS_QUERY_KEY).toEqual(['auth-providers'])
+  it('shares the public site config query key', () => {
+    expect(AUTH_PROVIDERS_QUERY_KEY).toEqual(['site', 'config'])
   })
 })
 

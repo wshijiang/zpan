@@ -10,8 +10,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
-import { useSiteOptions } from '@/hooks/use-site-options'
+import { useSiteConfig } from '@/hooks/use-site-config'
 import { ApiError, getSiteInvitation } from '@/lib/api'
+import { absoluteAuthCallbackURL } from '@/lib/auth-callback'
 import { signUp } from '@/lib/auth-client'
 
 export const Route = createFileRoute('/(auth)/sign-up')({
@@ -25,14 +26,10 @@ function SignUp() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { invite } = Route.useSearch()
-  const {
-    authSignupMode,
-    captchaEnabled,
-    captchaProvider,
-    captchaSiteKey,
-    isLoading: optionsLoading,
-    siteName,
-  } = useSiteOptions()
+  const { data: siteConfig, isLoading: configLoading } = useSiteConfig()
+  const authSignupMode = siteConfig?.auth.signupMode
+  const captcha = siteConfig?.auth.captcha
+  const siteName = siteConfig?.site.name ?? DEFAULT_SITE_NAME
   const { providers } = useOAuthProviders()
   const authProviders = providers
   const [email, setEmail] = useState('')
@@ -40,6 +37,7 @@ function SignUp() {
   const [password, setPassword] = useState('')
   const [inviteCode, setInviteCode] = useState('')
   const [error, setError] = useState('')
+  const [verificationSentTo, setVerificationSentTo] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [formExpanded, setFormExpanded] = useState(providers.length <= 3)
   const [captchaToken, setCaptchaToken] = useState('')
@@ -128,6 +126,22 @@ function SignUp() {
     )
   }
 
+  if (verificationSentTo) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="flex w-full max-w-sm flex-col gap-6 p-6 text-center">
+          <div className="flex flex-col gap-2">
+            <h1 className="text-2xl font-bold">{t('auth.verifyEmailTitle')}</h1>
+            <p className="text-muted-foreground">{t('auth.verifyEmailSent', { email: verificationSentTo })}</p>
+          </div>
+          <Button asChild variant="outline">
+            <Link to="/sign-in">{t('auth.backToSignIn')}</Link>
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
@@ -138,13 +152,17 @@ function SignUp() {
         name: '',
         email,
         password,
-        callbackURL: '/files',
-        fetchOptions: captchaEnabled ? { headers: { 'x-captcha-response': captchaToken } } : undefined,
+        callbackURL: absoluteAuthCallbackURL('/files', window.location.origin),
+        fetchOptions: captcha?.enabled ? { headers: { 'x-captcha-response': captchaToken } } : undefined,
         ...(authSignupMode === SignupMode.INVITE_ONLY ? { inviteCode } : {}),
         ...(hasValidInvite && invite ? { siteInvitationToken: invite } : {}),
       })
       if (result.error) {
         setError(result.error.message ?? t('auth.signUpFailed'))
+        return
+      }
+      if (result.data?.token === null) {
+        setVerificationSentTo(email)
         return
       }
       navigate({ to: '/files' })
@@ -224,15 +242,18 @@ function SignUp() {
                 <Input id="inviteCode" value={inviteCode} onChange={(e) => setInviteCode(e.target.value)} required />
               </div>
             )}
-            {captchaEnabled && captchaSiteKey && (
-              <ProviderCaptcha provider={captchaProvider} siteKey={captchaSiteKey} onToken={setCaptchaToken} />
+            {captcha?.enabled && (
+              <ProviderCaptcha provider={captcha.provider} siteKey={captcha.siteKey} onToken={setCaptchaToken} />
             )}
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button
               type="submit"
               className="w-full"
               disabled={
-                loading || optionsLoading || (mustUseInvitation && !hasValidInvite) || (captchaEnabled && !captchaToken)
+                loading ||
+                configLoading ||
+                (mustUseInvitation && !hasValidInvite) ||
+                (captcha?.enabled && !captchaToken)
               }
             >
               {loading ? t('auth.creatingAccount') : t('auth.signUp')}

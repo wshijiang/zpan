@@ -1,7 +1,7 @@
 // Integration-project tests for src/lib/api.ts share wrapper functions.
 // These run in the integration vitest project so codecov picks them up for patch coverage.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, deleteShare, getShare, listShares } from './api'
+import { ApiError, getShare, listShares, revokeShare } from './api'
 
 function makeResponse(body: unknown, ok = true, status = 200): Response {
   return {
@@ -23,7 +23,7 @@ describe('shares API wrappers (integration)', () => {
 
   describe('listShares', () => {
     it('calls /api/shares with default params and returns payload', async () => {
-      const payload = { items: [], total: 0, page: 1, pageSize: 20 }
+      const payload = { items: [], nextPageToken: null }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
       const result = await listShares()
@@ -31,18 +31,18 @@ describe('shares API wrappers (integration)', () => {
       expect(result).toEqual(payload)
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
       expect(url).toContain('/api/shares')
-      expect(url).toContain('page=1')
       expect(url).toContain('pageSize=20')
+      expect(url).not.toContain('pageToken=')
     })
 
-    it('forwards page, pageSize, and status query params', async () => {
-      const payload = { items: [], total: 3, page: 2, pageSize: 10 }
+    it('forwards pageToken, pageSize, and status query params', async () => {
+      const payload = { items: [], nextPageToken: 'later-token' }
       vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
-      await listShares(2, 10, 'active')
+      await listShares('current-token', 10, 'active')
 
       const [url] = vi.mocked(fetch).mock.calls[0] as [string]
-      expect(url).toContain('page=2')
+      expect(url).toContain('pageToken=current-token')
       expect(url).toContain('pageSize=10')
       expect(url).toContain('status=active')
     })
@@ -73,20 +73,22 @@ describe('shares API wrappers (integration)', () => {
     })
   })
 
-  describe('deleteShare', () => {
-    it('calls DELETE /api/shares/:id and resolves on 204', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 204 } as Response)
+  describe('revokeShare', () => {
+    it('puts status: revoked to /api/shares/:id/status and resolves with the share', async () => {
+      const payload = { token: 'share-1', status: 'revoked', kind: 'landing' }
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(payload))
 
-      await expect(deleteShare('share-1')).resolves.toBeUndefined()
+      await expect(revokeShare('share-1')).resolves.toEqual(payload)
       const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/shares/share-1')
-      expect(init.method).toBe('DELETE')
+      expect(url).toContain('/api/shares/share-1/status')
+      expect(init.method).toBe('PUT')
+      expect(JSON.parse(init.body as string)).toEqual({ status: 'revoked' })
     })
 
     it('throws ApiError on non-ok response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce({ ok: false, status: 403, statusText: 'Forbidden' } as Response)
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse({ error: 'Forbidden' }, false, 403))
 
-      await expect(deleteShare('share-1')).rejects.toBeInstanceOf(ApiError)
+      await expect(revokeShare('share-1')).rejects.toBeInstanceOf(ApiError)
     })
   })
 })

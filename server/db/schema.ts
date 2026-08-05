@@ -2,22 +2,50 @@ import { sql } from 'drizzle-orm'
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import { organization } from './auth-schema'
 
-export const matters = sqliteTable('matters', {
-  id: text('id').primaryKey(),
-  orgId: text('org_id').notNull(),
-  alias: text('alias').notNull().unique(),
-  name: text('name').notNull(),
-  type: text('type').notNull(),
-  size: integer('size').default(0),
-  dirtype: integer('dirtype').default(0),
-  parent: text('parent').notNull().default(''),
-  object: text('object').notNull().default(''),
-  storageId: text('storage_id').notNull(),
-  status: text('status').notNull().default('draft'), // draft, active, trashed
-  trashedAt: integer('trashed_at'),
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
-})
+export const matters = sqliteTable(
+  'matters',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull(),
+    alias: text('alias').notNull().unique(),
+    name: text('name').notNull(),
+    type: text('type').notNull(),
+    size: integer('size').default(0),
+    dirtype: integer('dirtype').default(0),
+    parent: text('parent').notNull().default(''),
+    object: text('object').notNull().default(''),
+    storageId: text('storage_id').notNull(),
+    status: text('status').notNull().default('draft'), // draft, active
+    trashedAt: integer('trashed_at'), // null = live, epoch ms = in trash (soft delete)
+    purgedAt: integer('purged_at'), // null = retained/billable, epoch ms = content permanently removed
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+  },
+  (t) => [
+    index('matters_status_dir_created_idx').on(t.status, t.dirtype, t.createdAt),
+    index('matters_webdav_path_idx').on(t.orgId, t.parent, t.name, t.status, t.trashedAt, t.purgedAt),
+    index('matters_webdav_children_idx').on(
+      t.orgId,
+      t.parent,
+      t.status,
+      t.trashedAt,
+      t.purgedAt,
+      sql`${t.dirtype} desc`,
+      t.name,
+    ),
+    index('matters_list_page_idx').on(
+      t.orgId,
+      t.parent,
+      t.status,
+      t.trashedAt,
+      t.purgedAt,
+      sql`${t.dirtype} desc`,
+      t.createdAt,
+      t.id,
+    ),
+    index('matters_trash_page_idx').on(t.orgId, t.status, t.purgedAt, t.trashedAt, t.createdAt, t.id),
+  ],
+)
 
 export const webdavDeadProperties = sqliteTable(
   'webdav_dead_properties',
@@ -40,7 +68,7 @@ export const webdavLocks = sqliteTable(
   'webdav_locks',
   {
     id: text('id').primaryKey(),
-    token: text('token').notNull().unique(),
+    token: text('token').notNull().unique(), // WebDAV opaquelocktoken URI value
     orgId: text('org_id').notNull(),
     resourcePath: text('resource_path').notNull(),
     owner: text('owner').notNull().default(''),
@@ -57,34 +85,58 @@ export const webdavLocks = sqliteTable(
 
 export const storages = sqliteTable('storages', {
   id: text('id').primaryKey(),
-  title: text('title').notNull(),
-  mode: text('mode').notNull(),
+  provider: text('provider').notNull().default(''),
   bucket: text('bucket').notNull(),
   endpoint: text('endpoint').notNull(),
   region: text('region').notNull().default('auto'),
   accessKey: text('access_key').notNull(),
   secretKey: text('secret_key').notNull(),
   filePath: text('file_path').notNull().default(''),
+  // Legacy v1 public-bucket setting. Kept physically for downgrade safety;
+  // it is intentionally absent from the storage API and runtime S3 gateway.
   customHost: text('custom_host').default(''),
   capacity: integer('capacity').notNull().default(0),
   egressCreditBillingEnabled: integer('egress_credit_billing_enabled', { mode: 'boolean' }).notNull().default(false),
   egressCreditUnitBytes: integer('egress_credit_unit_bytes').notNull().default(104857600),
   egressCreditPerUnit: integer('egress_credit_per_unit').notNull().default(1),
+  forcePathStyle: integer('force_path_style', { mode: 'boolean' }).notNull().default(true),
   used: integer('used').notNull().default(0),
-  status: text('status').notNull().default('active'),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  status: text('status').notNull().default('unknown'),
+  statusReason: text('status_reason'),
+  statusCheckedAt: integer('status_checked_at', { mode: 'timestamp_ms' }),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
 
-export const orgQuotas = sqliteTable('org_quotas', {
-  id: text('id').primaryKey(),
-  orgId: text('org_id').notNull(),
-  quota: integer('quota').notNull().default(0),
-  used: integer('used').notNull().default(0),
-  trafficQuota: integer('traffic_quota').notNull().default(0),
-  trafficUsed: integer('traffic_used').notNull().default(0),
-  trafficPeriod: text('traffic_period').notNull().default('1970-01'),
-})
+export const orgQuotas = sqliteTable(
+  'org_quotas',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull(),
+    quota: integer('quota').notNull().default(0),
+    used: integer('used').notNull().default(0),
+    trafficQuota: integer('traffic_quota').notNull().default(0),
+    trafficUsed: integer('traffic_used').notNull().default(0),
+    trafficPeriod: text('traffic_period').notNull().default('1970-01'),
+  },
+  (t) => [uniqueIndex('org_quotas_org_uniq').on(t.orgId)],
+)
+
+export const storageUsageBreakdowns = sqliteTable(
+  'storage_usage_breakdowns',
+  {
+    orgId: text('org_id').notNull(),
+    category: text('category').notNull(),
+    bytes: integer('bytes').notNull().default(0),
+    fileCount: integer('file_count').notNull().default(0),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [
+    uniqueIndex('storage_usage_breakdowns_org_category_uniq').on(t.orgId, t.category),
+    index('storage_usage_breakdowns_org_idx').on(t.orgId),
+  ],
+)
 
 export const cloudTrafficReports = sqliteTable(
   'cloud_traffic_reports',
@@ -101,6 +153,9 @@ export const cloudTrafficReports = sqliteTable(
     creditsPerUnit: integer('credits_per_unit'),
     status: text('status').notNull(),
     error: text('error'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    nextRetryAt: integer('next_retry_at', { mode: 'timestamp_ms' }),
+    issuedAt: integer('issued_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },
@@ -108,6 +163,9 @@ export const cloudTrafficReports = sqliteTable(
     uniqueIndex('cloud_traffic_reports_event_uniq').on(t.eventId),
     index('cloud_traffic_reports_org_period_idx').on(t.orgId, t.period),
     index('cloud_traffic_reports_status_idx').on(t.status),
+    index('cloud_traffic_reports_retry_idx').on(t.status, t.nextRetryAt, t.createdAt),
+    index('cloud_traffic_reports_issued_idx').on(t.issuedAt),
+    index('cloud_traffic_reports_updated_idx').on(t.updatedAt),
   ],
 )
 
@@ -131,9 +189,6 @@ export const orgQuotaEntitlements = sqliteTable(
   (t) => [
     index('org_quota_entitlements_org_resource_idx').on(t.orgId, t.resourceType, t.status),
     index('org_quota_entitlements_org_type_idx').on(t.orgId, t.resourceType, t.entitlementType, t.status),
-    uniqueIndex('org_quota_entitlements_active_plan_uniq')
-      .on(t.orgId, t.resourceType, t.entitlementType)
-      .where(sql`status = 'active' AND entitlement_type = 'plan'`),
     uniqueIndex('org_quota_entitlements_source_resource_uniq').on(t.source, t.sourceId, t.resourceType),
   ],
 )
@@ -156,6 +211,29 @@ export const webhookEvents = sqliteTable(
     uniqueIndex('webhook_events_source_event_uniq').on(t.source, t.eventId),
     index('webhook_events_source_created_idx').on(t.source, t.createdAt),
     index('webhook_events_status_idx').on(t.status),
+    index('webhook_events_processed_idx').on(t.processedAt),
+  ],
+)
+
+export const x402CapacityPurchaseIntents = sqliteTable(
+  'x402_capacity_purchase_intents',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull(),
+    resourceId: text('resource_id').notNull(),
+    requestHash: text('request_hash').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    cloudOrderId: text('cloud_order_id'),
+    cloudAttemptId: text('cloud_attempt_id'),
+    status: text('status').notNull().default('created'),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [
+    uniqueIndex('x402_capacity_purchase_intents_org_request_uniq').on(t.orgId, t.resourceId, t.requestHash),
+    uniqueIndex('x402_capacity_purchase_intents_org_idempotency_uniq').on(t.orgId, t.idempotencyKey),
+    index('x402_capacity_purchase_intents_attempt_idx').on(t.cloudAttemptId),
   ],
 )
 
@@ -194,7 +272,6 @@ export const siteInvitations = sqliteTable(
 export const systemOptions = sqliteTable('system_options', {
   key: text('key').primaryKey(),
   value: text('value').notNull().default(''),
-  public: integer('public', { mode: 'boolean' }).default(false),
 })
 
 export const licenseBindings = sqliteTable(
@@ -251,6 +328,7 @@ export const notifications = sqliteTable(
   (t) => [
     index('notifications_user_created_idx').on(t.userId, t.createdAt),
     index('notifications_user_read_idx').on(t.userId, t.readAt),
+    index('notifications_user_page_idx').on(t.userId, t.readAt, t.createdAt, t.id),
   ],
 )
 
@@ -284,6 +362,8 @@ export const backgroundJobs = sqliteTable(
     index('background_jobs_org_created_idx').on(t.orgId, t.createdAt),
     index('background_jobs_org_status_idx').on(t.orgId, t.status),
     index('background_jobs_org_type_idx').on(t.orgId, t.type),
+    index('background_jobs_created_idx').on(t.createdAt),
+    index('background_jobs_org_page_idx').on(t.orgId, t.createdAt, t.id),
   ],
 )
 
@@ -300,7 +380,7 @@ export const downloaders = sqliteTable(
     hostname: text('hostname').notNull().default('unknown'),
     platform: text('platform').notNull().default('unknown'),
     arch: text('arch').notNull().default('unknown'),
-    engine: text('engine').notNull().default('builtin'),
+    engine: text('engine').notNull().default('http'),
     capabilities: text('capabilities').notNull().default('[]'),
     maxConcurrentTasks: integer('max_concurrent_tasks').notNull().default(1),
     currentTasks: integer('current_tasks').notNull().default(0),
@@ -349,11 +429,20 @@ export const downloadTasks = sqliteTable(
     errorMessage: text('error_message'),
     resultObjectId: text('result_object_id'),
     runtime: text('runtime'),
+    events: text('events').notNull().default('[]'),
+    resolveStartedAt: integer('resolve_started_at', { mode: 'timestamp_ms' }),
+    resolveCompletedAt: integer('resolve_completed_at', { mode: 'timestamp_ms' }),
+    downloadCompletedAt: integer('download_completed_at', { mode: 'timestamp_ms' }),
+    ingestStartedAt: integer('ingest_started_at', { mode: 'timestamp_ms' }),
+    ingestCompletedAt: integer('ingest_completed_at', { mode: 'timestamp_ms' }),
+    seedingStartedAt: integer('seeding_started_at', { mode: 'timestamp_ms' }),
+    seedingStoppedAt: integer('seeding_stopped_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
     assignedAt: integer('assigned_at', { mode: 'timestamp_ms' }),
     startedAt: integer('started_at', { mode: 'timestamp_ms' }),
     finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+    deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
   },
   (t) => [
     index('download_tasks_org_created_idx').on(t.orgId, t.createdAt),
@@ -361,6 +450,11 @@ export const downloadTasks = sqliteTable(
     index('download_tasks_org_category_idx').on(t.orgId, t.category),
     index('download_tasks_org_tags_idx').on(t.orgId, t.tags),
     index('download_tasks_downloader_idx').on(t.assignedDownloaderId, t.status),
+    index('download_tasks_created_idx').on(t.createdAt),
+    index('download_tasks_finished_idx').on(t.finishedAt),
+    index('download_tasks_org_deleted_created_idx').on(t.orgId, t.deletedAt, t.createdAt),
+    index('download_tasks_org_page_idx').on(t.orgId, t.deletedAt, t.createdAt, t.id),
+    index('download_tasks_downloader_page_idx').on(t.assignedDownloaderId, t.deletedAt, t.createdAt, t.id),
   ],
 )
 
@@ -372,8 +466,9 @@ export const objectUploadSessions = sqliteTable(
     objectId: text('object_id').notNull(),
     storageId: text('storage_id').notNull(),
     storageKey: text('storage_key').notNull(),
-    uploadId: text('upload_id').notNull(),
+    uploadId: text('upload_id'), // null for a single-PutObject (≤5 GiB) session; set for multipart
     partSize: integer('part_size').notNull(),
+    onConflict: text('on_conflict').notNull().default('fail'), // strategy captured at create, applied at completion
     status: text('status').notNull(),
     createdBy: text('created_by').notNull(),
     expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
@@ -406,6 +501,7 @@ export const remoteDownloadUsageReports = sqliteTable(
     uniqueIndex('remote_download_usage_task_unit_uniq').on(t.taskId, t.unitIndex),
     index('remote_download_usage_org_idx').on(t.orgId),
     index('remote_download_usage_status_idx').on(t.status),
+    index('remote_download_usage_created_idx').on(t.createdAt),
   ],
 )
 
@@ -429,17 +525,100 @@ export const announcements = sqliteTable(
   ],
 )
 
-export const activityEvents = sqliteTable('activity_events', {
-  id: text('id').primaryKey(),
-  orgId: text('org_id').notNull(),
-  userId: text('user_id').notNull(),
-  action: text('action').notNull(), // 'upload', 'create', 'delete', 'rename', 'move', 'restore'
-  targetType: text('target_type').notNull(), // 'file', 'folder'
-  targetId: text('target_id'),
-  targetName: text('target_name').notNull(),
-  metadata: text('metadata'), // JSON
-  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
-})
+export const auditEvents = sqliteTable(
+  'audit_events',
+  {
+    id: text('id').primaryKey(),
+    eventKey: text('event_key').unique(),
+    orgId: text('org_id').notNull(),
+    userId: text('user_id'),
+    action: text('action').notNull(), // 'upload', 'create', 'delete', 'rename', 'move', 'restore'
+    targetType: text('target_type').notNull(), // 'file', 'folder'
+    targetId: text('target_id'),
+    targetName: text('target_name').notNull(),
+    metadata: text('metadata'), // JSON
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+    actorType: text('actor_type'),
+    actorRef: text('actor_ref'),
+    actorIssuer: text('actor_issuer'),
+  },
+  (t) => [
+    index('audit_events_org_created_idx').on(t.orgId, t.createdAt),
+    index('audit_events_user_created_idx').on(t.userId, t.createdAt),
+    index('audit_events_action_created_idx').on(t.action, t.createdAt),
+    index('audit_events_target_created_idx').on(t.targetType, t.targetId, t.createdAt),
+    index('audit_events_created_idx').on(t.createdAt),
+  ],
+)
+
+export const resourceChanges = sqliteTable(
+  'resource_changes',
+  {
+    sequence: integer('sequence').primaryKey({ autoIncrement: true }),
+    scopeType: text('scope_type').notNull(),
+    scopeId: text('scope_id').notNull(),
+    resourceType: text('resource_type').notNull(),
+    resourceId: text('resource_id').notNull(),
+    changeType: text('change_type').notNull(),
+    action: text('action'),
+    metadata: text('metadata'),
+    occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [
+    index('resource_changes_scope_sequence_idx').on(t.scopeType, t.scopeId, t.sequence),
+    index('resource_changes_resource_sequence_idx').on(t.resourceType, t.resourceId, t.sequence),
+    index('resource_changes_occurred_idx').on(t.occurredAt),
+  ],
+)
+
+export const statsRollupsHourly = sqliteTable(
+  'stats_rollups_hourly',
+  {
+    id: text('id').primaryKey(),
+    bucketStart: integer('bucket_start', { mode: 'timestamp_ms' }).notNull(),
+    orgId: text('org_id').notNull().default(''),
+    metricKey: text('metric_key').notNull(),
+    dimensionKey: text('dimension_key').notNull().default(''),
+    dimensionValue: text('dimension_value').notNull().default(''),
+    count: integer('count').notNull().default(0),
+    bytes: integer('bytes').notNull().default(0),
+    uniqueCount: integer('unique_count').notNull().default(0),
+    metadata: text('metadata'),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [
+    uniqueIndex('stats_rollups_hourly_bucket_metric_dim_uniq').on(
+      t.bucketStart,
+      t.orgId,
+      t.metricKey,
+      t.dimensionKey,
+      t.dimensionValue,
+    ),
+    index('stats_rollups_hourly_metric_bucket_idx').on(t.metricKey, t.bucketStart),
+    index('stats_rollups_hourly_dimension_bucket_idx').on(t.metricKey, t.dimensionKey, t.bucketStart),
+  ],
+)
+
+export const storageUsageLedger = sqliteTable(
+  'storage_usage_ledger',
+  {
+    id: text('id').primaryKey(),
+    eventKey: text('event_key').notNull().unique(),
+    orgId: text('org_id').notNull(),
+    storageId: text('storage_id').notNull(),
+    resourceType: text('resource_type').notNull(),
+    resourceId: text('resource_id').notNull(),
+    deltaBytes: integer('delta_bytes').notNull(),
+    reason: text('reason').notNull(),
+    occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [
+    index('storage_usage_ledger_occurred_idx').on(t.occurredAt),
+    index('storage_usage_ledger_org_occurred_idx').on(t.orgId, t.occurredAt),
+    index('storage_usage_ledger_storage_occurred_idx').on(t.storageId, t.occurredAt),
+  ],
+)
 
 export const shares = sqliteTable(
   'shares',
@@ -456,9 +635,14 @@ export const shares = sqliteTable(
     views: integer('views').notNull().default(0),
     downloads: integer('downloads').notNull().default(0),
     status: text('status').notNull().default('active'), // 'active' | 'revoked'
+    private: integer('private', { mode: 'boolean' }).notNull().default(false),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   },
-  (t) => [index('shares_creator_status_created_idx').on(t.creatorId, t.status, t.createdAt)],
+  (t) => [
+    index('shares_creator_status_created_idx').on(t.creatorId, t.status, t.createdAt, t.id),
+    index('shares_creator_private_created_idx').on(t.creatorId, t.private, t.createdAt),
+    index('shares_created_idx').on(t.createdAt),
+  ],
 )
 
 export const shareRecipients = sqliteTable(
@@ -473,6 +657,7 @@ export const shareRecipients = sqliteTable(
   (t) => [
     index('share_recipients_share_id_idx').on(t.shareId),
     index('share_recipients_user_id_idx').on(t.recipientUserId),
+    index('share_recipients_email_idx').on(t.recipientEmail),
   ],
 )
 
@@ -482,7 +667,12 @@ export const imageHostingConfigs = sqliteTable('image_hosting_configs', {
     .primaryKey()
     .references(() => organization.id, { onDelete: 'cascade' }),
   customDomain: text('custom_domain').unique(),
-  cfHostnameId: text('cf_hostname_id'),
+  domainProvider: text('domain_provider'),
+  providerHostnameId: text('provider_hostname_id'),
+  domainStatus: text('domain_status'),
+  domainError: text('domain_error'),
+  verificationToken: text('verification_token'),
+  domainLastCheckedAt: integer('domain_last_checked_at', { mode: 'timestamp_ms' }),
   domainVerifiedAt: integer('domain_verified_at', { mode: 'timestamp_ms' }),
   refererAllowlist: text('referer_allowlist'), // JSON array of strings; null/empty => allow all
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
@@ -493,11 +683,11 @@ export const imageHostingConfigs = sqliteTable('image_hosting_configs', {
 export const imageHostings = sqliteTable(
   'image_hostings',
   {
-    id: text('id').primaryKey(), // nanoid(12)
+    id: text('id').primaryKey(), // 13-character Base62 ID
     orgId: text('org_id')
       .notNull()
       .references(() => organization.id, { onDelete: 'cascade' }),
-    token: text('token').notNull().unique(), // "ih_" + nanoid(10)
+    token: text('token').notNull().unique(), // i + 11 random Base62 characters
     path: text('path').notNull(), // virtual path e.g. "blog/2026/04/shot.png"
     storageId: text('storage_id')
       .notNull()
@@ -508,13 +698,15 @@ export const imageHostings = sqliteTable(
     width: integer('width'),
     height: integer('height'),
     status: text('status').notNull().default('draft'), // 'draft' | 'active'
+    purgedAt: integer('purged_at'),
     accessCount: integer('access_count').notNull().default(0),
     lastAccessedAt: integer('last_accessed_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (t) => [
-    uniqueIndex('image_hostings_org_path_uniq').on(t.orgId, t.path),
+    uniqueIndex('image_hostings_org_path_uniq').on(t.orgId, t.path).where(sql`${t.purgedAt} IS NULL`),
     index('image_hostings_org_created_idx').on(t.orgId, t.createdAt),
+    index('image_hostings_page_idx').on(t.orgId, t.status, t.purgedAt, t.createdAt, t.id),
     index('image_hostings_token_idx').on(t.token),
   ],
 )

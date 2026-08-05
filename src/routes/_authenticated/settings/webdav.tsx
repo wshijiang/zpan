@@ -5,11 +5,16 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
+import { useSiteConfig } from '@/hooks/use-site-config'
 import { useSession } from '@/lib/auth-client'
 
 export const Route = createFileRoute('/_authenticated/settings/webdav')({
   component: WebDavSettingsPage,
 })
+
+export function resolveWebDavSettingsUrl(configuredUrl: string, origin: string): string {
+  return configuredUrl || `${origin}/dav/`
+}
 
 function CopyButton({ value }: { value: string }) {
   const { t } = useTranslation()
@@ -30,10 +35,26 @@ function CopyButton({ value }: { value: string }) {
 function WebDavSettingsPage() {
   const { t } = useTranslation()
   const { data: session } = useSession()
+  const { data: siteConfig } = useSiteConfig()
+  const webDavEnabled = siteConfig?.services.webdav.enabled ?? true
+  const configuredWebDavUrl = siteConfig?.services.webdav.url ?? ''
   const origin = typeof window === 'undefined' ? '' : window.location.origin
-  const webDavUrl = `${origin}/dav/`
+  const webDavUrl = resolveWebDavSettingsUrl(configuredWebDavUrl, origin)
   const user = session?.user as { email?: string; username?: string } | undefined
   const username = user?.email ?? user?.username ?? ''
+
+  if (!webDavEnabled) {
+    return (
+      <div className="max-w-2xl">
+        <Card>
+          <CardHeader>
+            <CardTitle>{t('settings.webdav.connection.section')}</CardTitle>
+            <CardDescription>{t('settings.webdav.disabled')}</CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div className="max-w-2xl">

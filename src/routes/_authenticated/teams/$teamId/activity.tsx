@@ -1,4 +1,4 @@
-import type { ActivityEvent } from '@shared/types'
+import type { AuditEvent } from '@shared/types'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -37,7 +37,7 @@ function userInitials(name: string): string {
     .slice(0, 2)
 }
 
-function ActivityItem({ event }: { event: ActivityEvent }) {
+function ActivityItem({ event }: { event: AuditEvent }) {
   const { t } = useTranslation()
 
   const actionLabel = t(`activity.action.${event.action}`, { defaultValue: event.action })
@@ -59,22 +59,39 @@ function ActivityItem({ event }: { event: ActivityEvent }) {
   }
 
   const createdAt = new Date(event.createdAt as unknown as string | number)
+  const actorLabel = formatActor(event)
+  const actorImage = event.actorType === 'user' ? event.user.image : null
 
   return (
     <div className="flex items-start gap-3 py-3">
       <Avatar className="h-8 w-8 flex-shrink-0">
-        {event.user.image && <AvatarImage src={event.user.image} alt={event.user.name} />}
-        <AvatarFallback className="text-xs">{userInitials(event.user.name || '?')}</AvatarFallback>
+        {actorImage && <AvatarImage src={actorImage} alt={actorLabel} />}
+        <AvatarFallback className="text-xs">{userInitials(actorLabel)}</AvatarFallback>
       </Avatar>
       <div className="min-w-0 flex-1">
         <p className="text-sm">
-          <span className="font-medium">{event.user.name || event.userId}</span>{' '}
-          <span className="text-muted-foreground">{detail}</span>
+          <span className="font-medium">{actorLabel}</span> <span className="text-muted-foreground">{detail}</span>
         </p>
         <p className="text-xs text-muted-foreground">{relativeTime(createdAt)}</p>
       </div>
     </div>
   )
+}
+
+function formatActor(event: AuditEvent): string {
+  if (event.actorType === 'oauth') {
+    const identity = event.actorRef ?? 'unknown'
+    return event.actorIssuer ? `Agent:${identity} · ${event.actorIssuer}` : `Agent:${identity}`
+  }
+  if (event.user.name) return event.user.name
+  if (event.userId) return event.userId
+  if (event.actorType === 'api_key') return event.actorRef ? `API key:${event.actorRef}` : 'API key'
+  if (event.actorType === 'agent') return event.actorRef ? `Agent:${event.actorRef}` : 'Agent'
+  if (event.actorType === 'anonymous') return 'Anonymous'
+  if (event.actorType === 'system') return event.actorRef ? `System:${event.actorRef}` : 'System'
+  if (event.actorType === 'downloader') return event.actorRef ? `Downloader:${event.actorRef}` : 'Downloader'
+  if (event.actorType === 'task-upload') return event.actorRef ? `Task upload:${event.actorRef}` : 'Task upload'
+  return 'Unknown'
 }
 
 function TeamActivityPage() {

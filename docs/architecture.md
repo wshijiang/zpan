@@ -1,443 +1,408 @@
 # Architecture & Technical Decisions
 
-Technical reference for ZPan v2 development. For product roadmap, see [V2_ROADMAP.md](../V2_ROADMAP.md).
+Technical reference for the current ZPan implementation. Product sequencing and
+future scope live in [V2_ROADMAP.md](../V2_ROADMAP.md) and
+[`docs/roadmap/`](roadmap/), not in this document.
 
-## Global Architecture
+## System Shape
 
+ZPan is a single-package full-stack TypeScript application. The server is the
+control plane for auth, metadata, quotas, sharing, WebDAV, background jobs, and
+paid-tier entitlement checks. File bytes live in S3-compatible object storage and
+are uploaded or downloaded through presigned URLs whenever possible.
+
+```text
+Browser SPA / WebDAV / API clients / downloader agents
+                    |
+                    v
+             Hono application
+                    |
+        middleware + route modules
+                    |
+                    v
+                 usecases
+                    |
+             ports / Deps object
+                    |
+   +----------------+----------------+
+   |                |                |
+ repos          gateways         providers
+   |                |                |
+Drizzle DB    S3 / Cloud / mail   CF APIs / changelog
 ```
-CF Workers (wrangler)                  Docker (Node.js)
-┌─────────────────────┐
-│ [assets] → dist/     │
-│ SPA fallback         │               entry-node.ts
-│ main: workers/       │               (serves both static + API)
-│  exports { fetch }   │                      │
-└──────────┬──────────┘                      │
-           │    Single deployment            │
-           └──────────┬──────────────────────┘
-                      ▼
-                 Hono (app)
-                      │
-        ┌─────────────┼──────────────┐
-        ▼             ▼              ▼
-     Better Auth   Routes/Services   Drizzle ORM
-     (auth)        (business logic)  (database)
-                      │
-                      ▼
-                 @aws-sdk/client-s3
-                 (presigned URLs)
-                      │
-                      ▼
-             S3 / R2 (file storage)
-```
 
-## Core Tech Stack
+Primary deployment target is Cloudflare Workers. Node.js/Docker is the backup
+runtime, and the same Hono app is adapted for other serverless targets.
 
-| Layer | Choice | Alternatives Considered | Why This One |
-|-------|--------|------------------------|--------------|
-| Web Framework | **Hono** | Express, Fastify, ElysiaJS | Native CF Workers + Node.js dual runtime. Lightweight, fast, web-standard Request/Response API |
-| ORM | **Drizzle** | Prisma, Kysely | First-class D1 support, type-safe, SQL-like syntax, lightweight bundle for CF Workers |
-| Auth | **Better Auth** | Lucia, Auth.js, custom JWT | Drizzle adapter, D1 support, built-in social login / OIDC / organization plugin, active development |
-| S3 SDK | **@aws-sdk/client-s3** | minio-js, custom fetch | Industry standard, works with every S3-compatible provider including R2 |
-| Package Manager | **pnpm** | npm, yarn, bun | Fast, strict dependency installs with a committed lockfile; Volta pins the version |
-| Frontend Framework | **React 19 + Vite** | Vue, Solid, Svelte | Largest ecosystem, Capacitor-ready for future native apps if needed |
-| UI Components | **shadcn/ui + Tailwind CSS 4** | Ant Design, MUI | Zero runtime overhead (source code, not npm dep), best responsive/mobile support, modern aesthetic preferred by international users |
-| Admin Scaffold | **[shadcn-admin](https://github.com/satnaing/shadcn-admin)** (11.6k stars) | Custom build | Fork as starting point for the **admin backend panel**. Includes sidebar, navigation, search, dark mode, responsive layout, settings pages. Same stack: Vite + TanStack Router + shadcn/ui. The user-facing frontend is custom-built |
-| File Manager | **Custom** (shadcn/ui + @tanstack/react-table + @dnd-kit) | SVAR, @cubone/react-file-manager | List/grid views, directory tree, breadcrumb, context menu, drag-and-drop, file preview, type-safe, full control |
-| Routing | **TanStack Router** | React Router, Next.js | Type-safe, lightweight, no framework lock-in. Included in shadcn-admin |
-| Data Table | **TanStack Table** (via shadcn/ui Data Table) | AG Grid | Share management, user management, admin pages. Included in shadcn/ui |
-| Icons | **Lucide** | Heroicons, Phosphor | Default icon set for shadcn/ui, consistent style |
-| Forms | **react-hook-form + zod** | Formik | Lightweight, type-safe validation, shadcn/ui has built-in form components |
-| File Upload UI | **react-dropzone** | Uppy, Filepond | Minimal, headless, composable with shadcn/ui. Community has ready-made shadcn upload blocks |
-| Charts | **Recharts** (via shadcn/ui Charts) | Chart.js, D3 | For analytics dashboard (v2.8). Included in shadcn/ui |
-| Notifications | **Sonner** (via shadcn/ui) | react-toastify | Upload feedback, copy-to-clipboard confirmations. Included in shadcn/ui |
+## Core Decisions
 
-## Frontend Architecture
+| Area | Decision | Reason |
+|------|----------|--------|
+| Server framework | Hono | Runs cleanly on Workers and Node with web-standard Request/Response |
+| API typing | Hono RPC for frontend, OpenAPI for external clients | Frontend gets compile-time path/type safety; non-TS clients get a stable REST contract |
+| Runtime database | D1 on Workers, SQLite or Turso/libSQL elsewhere | One SQLite-family schema across every deployment target |
+| ORM | Drizzle | Type-safe SQLite/D1 schema and migrations with low runtime overhead |
+| Auth | Better Auth | Email/password, social/OIDC, organizations, API keys, device flow |
+| Object storage | S3-compatible protocol | Works with R2, S3, MinIO, B2, Tigris, RustFS, and similar providers |
+| Frontend | React 19 + Vite + TanStack Router | SPA with typed file routes and no server-rendering framework lock-in |
+| UI | shadcn/ui-style components, Radix UI, Tailwind CSS 4, Lucide | Local component ownership with consistent interaction primitives |
+| List pagination | Signed opaque keyset tokens | Stable infinite loading without offset drift or exposing storage keys |
+| Realtime updates | One global SSE stream over a durable change feed | Resumable cross-runtime invalidation without per-page connections |
+| Tests | Vitest projects + Playwright | Unit, integration, Workers runtime, libSQL, and browser-level coverage |
 
-### Off-the-shelf vs Custom
+## Repository Layout
 
-| Component | Source | Custom Work |
-|-----------|--------|-------------|
-| Layout, sidebar, navigation, dark mode | shadcn-admin | Minimal — adapt routes and menu items |
-| File manager (list, grid, tree, drag-drop) | Custom (shadcn/ui + react-table + dnd-kit) | Built-in, path-based navigation |
-| Upload dropzone | react-dropzone + shadcn blocks | Compose with presigned URL upload logic |
-| Data tables (shares, users, storage) | shadcn/ui Data Table | Define columns and connect to API |
-| Dialogs (share settings, file detail) | shadcn/ui Dialog/Sheet | Build forms inside pre-made shells |
-| Global search | shadcn/ui Command | Connect to search API |
-| Toast / notifications | shadcn/ui Sonner | Wire to upload events |
-| **Share landing page** | **Custom** | Public page with file preview + download |
-| **Upload history panel** | **Custom** | Recent uploads with URL copy |
-| **Storage backend config forms** | **Custom** | S3 endpoint, credentials, path template |
-| **Image bed quick-upload view** | **Custom** | Paste/drop → get URL, minimal UI |
-
-Most of the heavy UI work is handled by existing components. Custom development focuses on ZPan-specific business pages.
-
-## Project Structure
-
-Single-package structure. Cargo workspace for Rust native tools (planned).
-
-```
+```text
 zpan/
-├── server/                    # Hono API
-│   ├── routes/                # API route handlers
-│   ├── services/              # Business logic
-│   ├── middleware/             # Hono middleware
-│   ├── db/                    # Drizzle schema
-│   ├── platform/              # CF vs Node.js adapters
-│   ├── entry-node.ts          # Node.js entry point
-│   └── auth.ts                # Better Auth config
-├── src/                       # React frontend (Vite + shadcn/ui)
-│   ├── components/            # UI components (files/, preview/, upload/, admin/, layout/)
-│   ├── routes/                # TanStack Router file-based routing
-│   ├── lib/                   # API client (Hono RPC), utils
-│   └── i18n/                  # Translations (en.json, zh.json)
-├── shared/                    # Shared types, Zod schemas, constants
-├── workers/                   # CF Workers entry
-│   └── app.ts                 # CF entry point
-├── migrations/                # D1/SQLite migrations (drizzle-kit generated)
-├── e2e/                       # Playwright E2E tests
-├── wrangler.toml              # Cloudflare Workers config
-├── biome.json                 # Lint + format config
-└── package.json               # Single package, pnpm
+├── server/
+│   ├── adapters/       # Concrete repos, gateways, and providers
+│   ├── db/             # Drizzle schemas and DB helpers
+│   ├── domain/         # Pure domain helpers and policy logic
+│   ├── http/           # Hono route modules
+│   ├── middleware/     # Hono middleware and principal resolution
+│   ├── platform/       # Runtime adapters: Workers, Node, libSQL
+│   ├── usecases/       # Business workflows and port interfaces
+│   ├── app.ts          # Hono app composition and route mounting
+│   ├── auth.ts         # Better Auth configuration
+│   ├── bootstrap.ts    # Runtime-independent app bootstrap
+│   └── entry-*.ts      # Node/serverless entry points
+├── src/
+│   ├── components/     # UI components and feature views
+│   ├── hooks/          # Frontend hooks
+│   ├── i18n/           # Frontend translations
+│   ├── lib/            # RPC clients, API wrappers, formatters, utilities
+│   └── routes/         # TanStack Router file routes
+├── shared/             # Shared schemas, constants, feature registry, types
+├── workers/            # Cloudflare Worker fetch/scheduled/queue entry
+├── migrations/         # drizzle-kit generated SQL migrations
+├── e2e/                # Playwright tests
+├── wrangler.toml       # Cloudflare Workers configuration
+└── package.json        # Single pnpm package
 ```
 
-## API Communication
+There is no native desktop or mobile client workspace in this repository.
+Native client implementations are expected to live in separate projects. This
+repository can still own server-side API contracts and isolated automation
+clients when they are part of the ZPan server/web product boundary.
 
-### Internal: Hono RPC (type-safe)
+## Runtime Entry Points
 
-Frontend-to-backend calls use Hono's built-in RPC for end-to-end type safety. Changing a backend route automatically surfaces type errors in the frontend at compile time.
+### Cloudflare Workers
 
-### External: Standard REST
+[`workers/bootstrap.ts`](../workers/bootstrap.ts) exports the Worker handlers:
 
-PicGo, ShareX, Flameshot, zpan-cli, and third-party integrations use standard REST endpoints with token authentication. Same routes, just accessed without the RPC client.
+- `fetch` creates a Cloudflare platform from the request environment, reuses a
+  cached Better Auth instance per isolate, injects Open Graph tags for share
+  pages, then delegates to `createApp`.
+- `scheduled` delegates to [`workers/scheduled.ts`](../workers/scheduled.ts) for
+  licensing refresh, traffic sync, quota reset, trash purge, and telemetry.
+- `queue` runs archive-job messages through the archive jobs gateway.
 
-### Data Fetching: TanStack Query
+### Node / Docker / Cloud Run
 
-All frontend data fetching goes through TanStack Query for caching, loading states, optimistic updates, and pagination.
+[`server/entry-node.ts`](../server/entry-node.ts) serves the same Hono app plus
+the built SPA from `dist/`. It chooses the platform at boot:
 
-## Internationalization (i18n)
+- `TURSO_DATABASE_URL` set: libSQL/Turso via `createLibsqlPlatform`
+- otherwise: local SQLite via `createNodePlatform`
 
-**react-i18next** for frontend translations. Default language: English. Bundled translations: English, Chinese (Simplified).
+Because Node has no platform scheduler, the entry starts interval-based jobs for
+license refresh, traffic sync, quota reset, trash purge, and telemetry.
 
-Translation files in `src/i18n/locales/{en,zh}.json`. Community can contribute additional languages via PR.
+### Other Serverless Targets
 
-Backend error messages returned as i18n keys, frontend resolves to localized strings.
-
-## Testing
-
-| Layer | Tool | Scope |
-|-------|------|-------|
-| Unit tests | **Vitest** | Shared schemas, constants, utilities |
-| Integration tests (Node) | **Vitest** + Hono `app.request()` | Route handlers, middleware, auth flows (better-sqlite3) |
-| Integration tests (CF) | **Vitest** + `@cloudflare/vitest-pool-workers` | Same routes on Cloudflare Workers runtime (Miniflare + D1) |
-| E2E tests | **Playwright** | Full user flows: login, navigation, file management |
-
-Coverage gate: 90% on server. Playwright tests live in `e2e/` at the repo root, run against a local dev server.
-
-## CI/CD
-
-GitHub Actions:
-
-**On PR:**
-- `pnpm lint` — Biome lint + format check
-- `pnpm typecheck` — TypeScript compilation
-- `pnpm test` — Vitest unit + API tests
-- `pnpm e2e` — Playwright tests
-
-**On merge to master:**
-- Build + deploy to CF Workers (preview / production)
-- Build Docker image + push to Docker Hub (planned)
+`server/entry-lambda.ts`, `server/entry-vercel.ts`,
+`server/entry-netlify.ts`, and `server/entry-azure.ts` are thin adapters around
+the same app and platform model. Business logic does not fork by deployment
+target.
 
 ## Platform Abstraction
 
-The only code that differs between CF and Docker:
+[`server/platform/interface.ts`](../server/platform/interface.ts) is the runtime
+boundary:
 
-```
-src/platform/
-├── interface.ts      # Platform interface definition
-├── cloudflare.ts     # CF Workers: D1 binding
-└── node.ts           # Node.js: better-sqlite3 / pg
-```
-
-### Interface
-
-```typescript
+```ts
 interface Platform {
-  db: Database    // D1 (CF) or better-sqlite3 (Node)
+  db: Database
   getEnv(key: string): string | undefined
+  getBinding<T = unknown>(key: string): T | undefined
 }
 ```
 
-Note: `s3` and `cron` will be added in later versions.
+Concrete implementations:
 
-### Entry Points
+- `cloudflare.ts` wraps D1 and platform bindings.
+- `node.ts` wraps `better-sqlite3`.
+- `libsql.ts` wraps `@libsql/client` and runs migrations against Turso/libSQL.
+- `context.ts` provides an `AsyncLocalStorage` proxy so shared objects can read
+  the active request platform safely.
 
-- `workers/bootstrap.ts` — exports `default { fetch }`, wrangler bundles it directly. Static frontend served by wrangler's `[assets]` config with SPA fallback.
-- `server/entry-node.ts` — starts Hono via `@hono/node-server`, serves both API and static frontend from `./dist` on the same port.
+Only runtime infrastructure belongs in `platform/`. Business decisions stay in
+usecases and domain modules.
 
-## Per-Version Technical Decisions
+## Server Layering
 
----
+The server follows a ports-and-adapters shape.
 
-### v2.0 — Foundation
+### `server/app.ts`
 
-**Database: Drizzle + D1 / SQLite**
+Creates the Hono app, installs global middleware, exposes OpenAPI/Scalar docs,
+mounts WebDAV, and mounts each API resource. `/api/openapi.json` includes ZPan's
+explicit resource contracts plus operations admitted by the declarative Better
+Auth OpenAPI registry. The registry currently contains only the two Downloader
+Device Flow operations. Better Auth's full runtime schema remains available
+only from its own reference endpoints.
 
-Schema definition in `src/db/schema.ts`, single source of truth. Drizzle Kit for migrations.
+### `server/http/`
 
-Tables: `matters`, `storages`, `storage_quotas`, `system_options` + Better Auth managed tables (`user`, `session`, `account`, `verification`).
+Route modules own HTTP concerns:
 
-**Auth: Better Auth (email/password only)**
+- path shape and Hono mounting
+- request validation and response serialization
+- route-level auth guards
+- OpenAPI route metadata
 
-Mounted at `/api/auth/*`. Session-based auth with secure cookies. Better Auth manages its own user/session tables — ZPan references the user ID in its own tables.
+Routes should call usecases or narrow domain helpers. They should not reimplement
+business workflows.
 
-**Storage Provider: Unified S3 protocol**
+### `server/usecases/`
 
-One `@aws-sdk/client-s3` instance per storage backend. No per-provider SDKs (unlike v1 which had 8 separate implementations). All providers accessed via S3-compatible API.
+Usecases own business workflows and coordination:
 
-Key operations:
-- `PutObjectCommand` presigned URL for uploads
-- `GetObjectCommand` presigned URL for downloads
-- `HeadObjectCommand` for upload verification
-- `CopyObjectCommand` for file copy
-- `DeleteObjectCommand` / `DeleteObjectsCommand` for deletion
+- file object create/upload/complete/trash/restore/transfer
+- quota checks and traffic metering
+- sharing and save-to-drive behavior
+- team and user administration
+- site settings, licensing, announcements, branding, audit
+- archive processing and remote download task orchestration
 
-**File Path Templating**
+Usecases receive `deps` as their first argument and reach the outside world only
+through ports.
 
-Carried over from v1. Storage config includes `file_path` template with variables: `$UID`, `$UUID`, `$RAW_NAME`, `$RAW_EXT`, `$NOW_DATE`, `$RAND_16KEY`, etc.
+### `server/usecases/ports*.ts`
 
-**CORS**
+Ports define the contracts usecases need from persistence and external systems:
+repos, S3, email, zip, Cloud licensing, image upload, download tokens, and
+similar dependencies.
 
-v1 auto-configured CORS on storage setup via provider-specific SDKs. v2 drops this — document the required CORS config instead, since S3 CORS can be set via any S3 client or cloud console. Less magic, fewer provider-specific issues.
+### `server/adapters/`
 
----
+Adapters implement ports:
 
-### v2.1 — Auth & Access
+- `repos/` persists to Drizzle tables.
+- `gateways/` talks to S3, email, ZPan Cloud, archive queues, and zip handling.
+- `providers/` wraps platform/provider-specific APIs such as Cloudflare custom
+  hostnames or changelog fetching.
 
-**Social Login: Better Auth built-in**
+[`server/composition.ts`](../server/composition.ts) is the composition root and
+the only place concrete adapters are assembled into the `Deps` object.
 
-Configure via `socialProviders` in Better Auth config. Each provider needs `clientId` and `clientSecret` from env vars.
+### `server/domain/`
 
-**OIDC: Better Auth Generic OAuth plugin**
+Pure policy and transformation helpers live here when they do not need I/O:
+licensing checks, path templating, WebDAV XML helpers, share rules, quota math,
+name-conflict planning, and similar logic.
 
-```typescript
-import { genericOAuth } from "better-auth/plugins"
+## Authentication And Principals
 
-genericOAuth({
-  config: [{
-    providerId: "company-sso",
-    discoveryUrl: "https://idp.example.com/.well-known/openid-configuration",
-    clientId: env.OIDC_CLIENT_ID,
-    clientSecret: env.OIDC_CLIENT_SECRET,
-  }]
-})
-```
+Better Auth owns the core auth tables and session lifecycle. ZPan adds route
+guards and principal normalization in [`server/middleware/auth.ts`](../server/middleware/auth.ts).
 
-OIDC provider config stored in `system_options` table, editable via admin panel.
+The auth middleware is intentionally soft-fail: it tries to identify the caller
+and sets context variables, while each route decides whether anonymous access is
+allowed.
 
-**Invite Codes**
+Supported principals:
 
-New table `invite_codes` (`code`, `created_by`, `used_by`, `used_at`, `expires_at`). Registration mode stored in `system_options`. Better Auth `before` hook on sign-up validates invite code.
+- `user` — browser cookie session or bearer session
+- `api-key` — Better Auth API key plugin, including org-scoped keys
+- `downloader` — remote downloader agent token
+- `download-task-upload` — scoped token that lets a downloader upload one task's
+  completed output
 
----
+Route guards then enforce `requireAuth`, `requireAdmin`, `requireDownloader`, or
+`requireTeamRole('viewer' | 'editor' | 'owner')`.
 
-### v2.2 — Teams
+## Data Model
 
-**Better Auth Organization Plugin**
+Drizzle schemas live in [`server/db/schema.ts`](../server/db/schema.ts) and
+[`server/db/auth-schema.ts`](../server/db/auth-schema.ts). Migrations live at the
+repo root in `migrations/` and are generated with `pnpm db:generate`.
 
-Direct use, no custom implementation needed.
-
-```typescript
-import { organization } from "better-auth/plugins"
-
-organization({
-  teams: { enabled: true },
-  // custom roles for ZPan
-})
-```
-
-**Custom Roles:**
-
-```typescript
-const statement = {
-  file: ["upload", "download", "delete", "share"],
-  workspace: ["manage", "invite"],
-} as const
-
-const ac = createAccessControl(statement)
-const viewer = ac.newRole({ file: ["download"] })
-const editor = ac.newRole({ file: ["upload", "download", "delete", "share"] })
-const owner = ac.newRole({
-  file: ["upload", "download", "delete", "share"],
-  workspace: ["manage", "invite"],
-})
-```
-
-**Data Model**
-
-Organization plugin creates its own tables (`organization`, `member`, `invitation`). ZPan's `matters` table gets an optional `org_id` field — when set, the file belongs to the team workspace instead of the individual user.
-
-**User Share Homepage**
-
-Route: `GET /u/{username}` — server-side rendered page listing user's public shares. Data from `shares` table filtered by `uid` + a `public_profile` flag.
-
----
-
-### v2.3 — Sharing
-
-**Share Token Auth**
-
-Public shares: no auth needed, accessible by alias.
-Private shares: client sends password via `POST /api/shares/{alias}/token`, gets a short-lived JWT stored in cookie. Subsequent requests include this cookie.
-
-**Direct Links**
-
-`GET /s/{alias}` → returns the file itself (redirect to presigned S3 URL or public URL).
-`GET /s/{alias}/info` → returns the share landing page with preview.
-
----
-
-### v2.4 — Image Bed
-
-**Upload API**
-
-New endpoint `POST /api/upload` — simplified single-endpoint upload for tool integrations. Accepts `multipart/form-data` or presigned URL flow. Returns URL in requested format (raw, markdown, html, bbcode).
-
-Separate from the existing `POST /api/matters` which is for the file manager UI (creates matter record first, then returns presigned URL).
-
-**ShareX Compatibility**
-
-ShareX Custom Uploader is a JSON spec (`.sxcu` file). ZPan generates this config file dynamically via `GET /api/integrations/sharex` with the user's API token embedded.
-
-**PicGo Compatibility**
-
-PicGo uses a simple REST API: `POST` with `multipart/form-data`, response includes `url` field. The same `/api/upload` endpoint handles this.
-
----
-
-### v2.5 — Branding & Polish
-
-**Site Branding**
-
-Stored in `system_options` table under key `core.branding`: `{ logo, title, favicon, description }`. Frontend fetches on load via `GET /api/system/options/core.branding` (public endpoint).
-
-**Custom File Domain**
-
-`custom_host` field on storage backends. When set, presigned URLs and public URLs use this host. No server-side proxy — DNS points directly to S3/R2.
-
-**Dark Mode**
-
-Frontend-only, CSS variables + user preference stored in localStorage.
-
----
-
-### v2.6 — Backup (zpan-cli)
-
-**Location**: `native/crates/zpan-cli/` (same monorepo)
-
-**Language: Rust**
-
-Rust produces small (~5MB) static binaries for every platform (macOS, Linux, Windows, ARM). No runtime dependencies. Ideal for NAS environments.
-
-Core logic lives in `zpan-core` crate, shared with the desktop app (v2.7).
-
-**Rust crate dependencies:**
-- `aws-sdk-s3` — S3 operations (upload, download, head, delete)
-- `notify` — filesystem watching for real-time backup
-- `tokio-cron-scheduler` — scheduled backup runs
-- `clap` — CLI argument parsing
-- `blake3` — fast file hashing for change detection
-- `reqwest` — HTTP client for ZPan API calls
-- `serde` / `serde_json` — serialization
-- `tokio` — async runtime
-
-**Sync Protocol**
-
-CLI authenticates with ZPan via API token. Workflow:
-1. Scan local directory, compute file hashes
-2. `POST /api/sync/check` — send hashes, get back list of files needing upload
-3. `POST /api/sync/batch-presign` — get presigned URLs for new/changed files
-4. Upload directly to S3
-5. `POST /api/sync/complete` — report uploaded files, ZPan updates matter records
-
-**ZPan API additions:**
-- `POST /api/sync/check` — file fingerprint comparison
-- `POST /api/sync/batch-presign` — batch presigned URL generation
-- `GET /api/sync/status` — backup job status for web UI
-
----
-
-### v2.7 — Sync & Desktop App
-
-**Change Log**
-
-New table `changes` (`id`, `matter_id`, `action`, `path`, `hash`, `device_id`, `timestamp`). Every file create/update/delete writes a change record.
-
-**Sync API:**
-- `GET /api/sync/changes?since={id}&device={deviceId}` — pull changes from other devices
-- `POST /api/sync/changes` — push local changes
-
-**Conflict Strategy**
-
-Default: keep both files. Remote version wins the original filename, local version renamed to `{name}.conflict-{device}-{date}.{ext}`. Optional `--conflict last-write-wins` flag for advanced users.
-
-**Desktop App: Tauri 2**
-
-Location: `native/crates/zpan-desktop/`. Ships alongside v2.7 as the graphical interface for backup + sync.
-
-- Built with Tauri 2, frontend reuses React components from `src/`
-- Core sync/backup logic imported from `zpan-core` crate (same code as CLI)
-- System tray with status menu (backup status, sync status, pause, settings)
-- Settings UI for configuring backup directories, sync folders, server connection
-- Auto-start on login (OS-native)
-- macOS, Windows, Linux builds via Tauri's cross-platform tooling
-
-Tauri dependencies:
-- `tauri` — app framework, system tray, window management
-- `tauri-plugin-autostart` — launch on login
-- `tauri-plugin-notification` — native notifications (sync conflict, backup complete)
-
----
-
-### v2.8 — Managed Service
-
-**Stripe: `stripe` npm package**
-
-Webhook endpoint at `POST /api/webhooks/stripe` for subscription lifecycle events. Plan limits enforced in middleware (check user's plan before allowing operations).
-
-**Analytics**
-
-Managed version runs a separate analytics pipeline. Options:
-- CF Analytics Engine (native, no extra infra)
-- ClickHouse (Docker deployment)
-- Simple approach: aggregate counters in D1/PostgreSQL with daily rollup cron
-
-**Webhooks**
-
-New tables: `webhook_endpoints` (`url`, `events`, `secret`) and `webhook_deliveries` (`endpoint_id`, `event`, `payload`, `status`, `attempts`). Delivery via CF Queue (managed) or Bull/BullMQ (Docker).
-
-**Audit Log**
-
-New table `audit_logs` (`user_id`, `action`, `resource_type`, `resource_id`, `metadata`, `timestamp`). Middleware writes audit entries on every mutating API call. Retention enforced by cron (7 days for Pro, 90 days for Team).
-
----
-
-### v2.9 — Managed Advanced
-
-**Content Moderation**
-
-Upload hook triggers image classification. Options:
-- CF Workers AI (managed deployment)
-- External API (AWS Rekognition, Google Cloud Vision)
-
-Flagged files stored in `moderation_queue` table for admin review.
-
-**Server-side Processing**
-
-Background worker (CF Queue consumer or separate container) handles:
-- Archive extraction: stream zip from S3, extract entries, write back to S3
-- Thumbnails: sharp / CF Image Resizing
-- Format conversion: sharp for images
-
-**Managed Custom Domains**
-
-CF for SaaS (managed deployment) — programmatic custom domain provisioning via CF API. Creates custom hostname with automatic SSL.
+Major table groups:
+
+- **Auth and organizations**: `user`, `session`, `account`, `organization`,
+  `member`, `invitation`, `apikey`, `deviceCode`
+- **Objects and storage**: `matters`, `storages`, `object_upload_sessions`
+- **Quota and billing**: `org_quotas`, `org_quota_entitlements`,
+  `cloud_traffic_reports`, `webhook_events`
+- **Sharing and notifications**: `shares`, `share_recipients`, `notifications`
+- **Site administration**: `system_options`, `license_bindings`,
+  `announcements`, `activity_events`, invite tables
+- **WebDAV**: `webdav_dead_properties`, `webdav_locks`
+- **Jobs and downloaders**: `background_jobs`, `downloaders`, `download_tasks`,
+  `remote_download_usage_reports`
+- **Image hosting**: `image_hosting_configs`, `image_hostings`
+
+`matters` is the file tree. Every object belongs to an organization (`orgId`),
+not directly to a user. Storage object keys are implementation details hidden
+behind ZPan's object and storage abstractions.
+
+## File And Object Flow
+
+### Browser Upload
+
+1. Frontend calls `POST /api/objects` through the Hono RPC wrapper.
+2. Server creates a draft `matters` row plus an `object_upload_sessions` row.
+3. Server returns presigned upload instructions.
+4. Browser uploads bytes directly to S3/R2 with raw `fetch` to the presigned URL.
+5. Frontend calls the completion endpoint.
+6. Server verifies and activates the `matters` row, updates quota/usage, and
+   records activity.
+
+Abort paths discard the draft and try to clean up storage-side multipart state
+where possible.
+
+### Download
+
+Authenticated object downloads and public share downloads resolve metadata in
+ZPan, enforce access/quota/credit rules, and return or redirect to a presigned
+object-storage URL. ZPan does not proxy file bytes unless a feature explicitly
+requires it.
+
+### Remote Download
+
+1. A user creates a `download_tasks` row.
+2. A registered downloader agent heartbeats to `/api/downloads/downloaders`.
+3. The server assigns queued tasks based on availability/capabilities.
+4. The downloader fetches source bytes outside the main ZPan runtime.
+5. The downloader uploads completed output back through a scoped task-upload
+   token and the normal object upload path.
+6. ZPan records status, activity, and optional remote-download usage reports.
+
+### WebDAV
+
+WebDAV paths resolve to `matters` records through the WebDAV usecases and repos.
+Object keys remain private implementation details. Browser UI, API, and WebDAV
+all share the same authorization and storage model.
+
+### Archive Jobs
+
+Archive operations use `background_jobs` for durable status and progress. On
+Workers, queue messages execute archive work. On Node, archive work runs through
+the gateway path available to the current runtime.
+
+## Frontend Architecture
+
+The frontend is a Vite React SPA.
+
+- File routes live in `src/routes/` via TanStack Router.
+- Data fetching uses TanStack Query.
+- API wrappers live in `src/lib/api.ts`; each wrapper is tested in
+  `src/lib/api.test.ts`.
+- RPC clients live in `src/lib/rpc.ts` and use Hono RPC types exported from
+  `server/app.ts`.
+- Shared types and schemas must come from `shared/`.
+- UI components live under `src/components/`, grouped by feature and common UI
+  primitives.
+- i18n strings live in `src/i18n/locales/en.json` and `zh.json`.
+
+Frontend code must call ZPan APIs through Hono RPC wrappers. The exception is
+external URLs that are not ZPan APIs, such as presigned S3 upload URLs.
+
+## API Surfaces
+
+- `/api/*` — primary JSON API, mounted from route modules in `server/http/`
+- `/api/auth/*` — Better Auth routes
+- `/api/openapi.json` — public ZPan product contract; Better Auth operations are
+  denied by default and currently only the registered Downloader Device Flow
+  operations are included
+- `/api/auth/reference` and `/api/auth/open-api/generate-schema` — Better Auth's
+  complete reference UI and generated runtime schema
+- `/api/docs` — Scalar API reference
+- `/dav/*` — WebDAV endpoint
+- `/api/events` — one resumable server-sent event stream for scoped durable
+  resource changes
+- `/r/*` and `/s/*` — public redirect/share surfaces
+- `/api/store/*` — quota store and Cloud webhook endpoints
+
+Public, authenticated, admin, downloader, and webhook routes can share a path
+prefix. Authorization is per route or per mounted sub-app, so mount order matters
+when a public/user router and admin router share a prefix.
+
+Unbounded list APIs use signed opaque keyset tokens and the SPA consumes them
+with infinite queries. Realtime mutations append an atomic `resource_changes`
+row; the global SSE stream delivers those invalidation facts using the change
+sequence as `Last-Event-ID`. See
+[List Pagination and Realtime Changes](design/list-pagination-realtime.md) for
+the contract, replay, retention, and indexing rules.
+
+## Background Work
+
+Cloudflare Workers:
+
+- `scheduled()` handles license refresh, traffic report sync, quota reset, trash
+  purge, and telemetry.
+- `queue()` handles archive job messages.
+
+Node/Docker:
+
+- `server/entry-node.ts` runs equivalent recurring work with `setInterval`.
+
+Background jobs must be idempotent where possible. External delivery and Cloud
+reporting tables use stable event ids to prevent duplicate effects.
+
+## Paid-Tier Architecture
+
+Paid-tier availability is certificate based.
+
+- ZPan Cloud is the source of truth for subscriptions and bound instances.
+- ZPan stores the active binding in `license_bindings`.
+- ZPan verifies signed entitlement certificates locally.
+- `shared/feature-registry.ts` is the feature-comparison and gate-key source of
+  truth.
+- `server/middleware/require-feature.ts` gates API routes that require a paid
+  feature.
+
+The quota store uses Cloud for checkout/payment and ZPan for local catalog,
+entitlement delivery, quota calculation, and usage enforcement.
+
+## Testing And Quality Gates
+
+Configured test projects in [`vitest.config.ts`](../vitest.config.ts):
+
+- `unit` — pure utilities, schemas, domain helpers, and frontend components in
+  jsdom
+- `integration` — Hono route/usecase integration against SQLite
+- `cloudflare` — Workers runtime tests with D1 migrations applied through
+  `@cloudflare/vitest-pool-workers`
+- `libsql` — platform smoke tests for the libSQL/Turso path
+
+Other gates:
+
+- `pnpm lint` — Biome lint and format check
+- `pnpm typecheck` — server and frontend TypeScript projects
+- `pnpm test` — unit + integration
+- `pnpm test:cf` — Workers runtime tests
+- `pnpm test:libsql` — libSQL platform tests
+- `pnpm e2e` — Playwright browser flows
+
+Every PR that changes API or UI behavior also needs preview-environment
+verification per [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+## Architectural Rules
+
+- Keep the server S3-native: no provider-specific storage SDKs unless the
+  abstraction genuinely requires it.
+- Keep platform-specific code in `server/platform/`, Worker entry files, or
+  deployment adapters.
+- Keep business workflows in usecases; HTTP routes should stay thin.
+- Use ports/adapters for persistence and external services.
+- Put shared contracts in `shared/`; do not duplicate types in frontend/server
+  folders.
+- Generate migrations with drizzle-kit; do not hand-author migration journal
+  entries.
+- Preserve direct-to-object-storage upload/download paths unless a feature has a
+  concrete reason to proxy bytes.
+- Treat personal spaces and team spaces as organization-owned data containers;
+  quota, sharing, WebDAV, and future clients must preserve that ownership model.

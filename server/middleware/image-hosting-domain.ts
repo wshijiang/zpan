@@ -1,13 +1,18 @@
-import { eq } from 'drizzle-orm'
 import type { Context, Next } from 'hono'
-import type { Storage as S3Storage } from '../../shared/types'
-import { imageHostingConfigs } from '../db/schema'
+import { ZPAN_CLOUD_URL_DEFAULT } from '../../shared/constants'
+import { imageHostingNotFound } from '../http/image-hosting-not-found'
+import { PRESIGN_TTL_SECS } from '../http/share-utils'
 import type { Env } from '../middleware/platform'
-import { PRESIGN_TTL_SECS, s3 } from '../routes/share-utils'
-import { reportTrafficForDownload } from '../routes/traffic-metering-utils'
-import { consumeTrafficIfQuotaAllows, refundTraffic } from '../services/effective-quota'
-import { getImageByOrgPath, incrementAccessCount, resolveCustomDomain } from '../services/image-hosting'
-import { getStorage } from '../services/storage'
+import type { Platform } from '../platform/interface'
+import type { Deps } from '../usecases/deps'
+import { cacheVerifiedImageDomain, resolveCachedImageDomain } from '../usecases/image-hosting/domain-cache'
+import { forbidden, insufficientCredits, notFound, quotaExceeded, storageNotFound } from '../usecases/ports'
+import {
+  confirmDownloadTraffic,
+  reportDownloadEgress,
+  reverseDownloadTraffic,
+} from '../usecases/store/traffic-metering'
+import { createTrafficEventId, recordDownloadFailure, recordDownloadIssued } from '../usecases/transfer-activity'
 
 function stripPort(host: string): string {
   const lastColon = host.lastIndexOf(':')
@@ -23,13 +28,9 @@ function normalizeHost(raw: string): string | null {
 
 function getAppHostCandidates(c: Context<Env>): string[] {
   const candidates = ['workers.dev'] // *.workers.dev covers preview deployments
-  const appHost = c.get('platform').getEnv('PUBLIC_APP_HOST')
-  if (appHost) {
-    const bare = appHost
-      .replace(/^https?:\/\//, '')
-      .split('/')[0]
-      .toLowerCase()
-    if (bare) candidates.push(bare)
+  const publicOrigin = c.get('sitePublicOrigin')
+  if (publicOrigin) {
+    candidates.push(new URL(publicOrigin).hostname.toLowerCase())
   }
   return candidates
 }
@@ -45,75 +46,207 @@ function checkReferer(refererAllowlist: string[], refererHeader: string | null):
   }
 }
 
-async function handleImageByPath(c: Context<Env>, orgId: string, virtualPath: string): Promise<Response> {
-  const db = c.get('platform').db
+async function handleImageByPath(
+  request: Request,
+  deps: Deps,
+  platform: Platform,
+  orgId: string,
+  virtualPath: string,
+): Promise<Response> {
+  const resolved = await deps.imageHosting.resolveActiveByOrgPath(orgId, virtualPath)
+  if (!resolved) return imageHostingNotFound(request)
 
-  const image = await getImageByOrgPath(db, orgId, virtualPath)
-  if (!image) return c.json({ error: 'Not found' }, 404)
+  const { image, refererAllowlist } = resolved
 
-  const configRows = await db.select().from(imageHostingConfigs).where(eq(imageHostingConfigs.orgId, orgId)).limit(1)
-  if (configRows.length === 0) return c.json({ error: 'Not found' }, 404)
-
-  const config = configRows[0]
-  const refererAllowlist = config.refererAllowlist ? (JSON.parse(config.refererAllowlist) as string[]) : []
-
-  const refererHeader = c.req.header('Referer') ?? null
+  const refererHeader = request.headers.get('Referer')
   if (!checkReferer(refererAllowlist, refererHeader)) {
-    return c.json({ error: 'forbidden referer' }, 403)
+    throw forbidden('forbidden referer')
   }
 
-  const storage = (await getStorage(db, image.storageId)) as unknown as S3Storage
-  if (!storage) return c.json({ error: 'Storage not found' }, 404)
+  const storage = await deps.storages.get(image.storageId)
+  if (!storage) throw storageNotFound('Storage not found')
 
-  const trafficAllowed = await consumeTrafficIfQuotaAllows(db, image.orgId, image.size)
-  if (!trafficAllowed) return c.json({ error: 'Traffic quota exceeded' }, 422)
+  const trafficAllowed = await deps.quota.consumeTrafficIfQuotaAllows(image.orgId, image.size)
+  if (!trafficAllowed) {
+    await recordImageDownloadFailure(deps, image, 'quota_exceeded')
+    throw quotaExceeded('Traffic quota exceeded')
+  }
 
   let url: string
   try {
-    url = await s3.presignInline(storage, image.storageKey, image.mime, PRESIGN_TTL_SECS)
+    url = await deps.s3.presignInline(storage, image.storageKey, image.mime, PRESIGN_TTL_SECS)
   } catch (e) {
-    await refundTraffic(db, image.orgId, image.size)
+    await deps.quota.refundTraffic(image.orgId, image.size)
+    await recordImageDownloadFailure(deps, image, 'presign_failed')
     throw e
   }
 
-  const trafficReportError = await reportTrafficForDownload(c, {
+  const trafficEventId = createTrafficEventId()
+  const trafficOutcome = await reportDownloadEgress(deps, {
+    cloudBaseUrl: platform.getEnv('ZPAN_CLOUD_URL') ?? ZPAN_CLOUD_URL_DEFAULT,
     orgId: image.orgId,
     bytes: image.size,
     storage,
     source: 'custom_domain_image',
     sourceId: image.id,
+    eventId: trafficEventId,
   })
-  if (trafficReportError) return trafficReportError
+  if (!trafficOutcome.ok) {
+    await recordImageDownloadFailure(deps, image, 'insufficient_credits')
+    throw insufficientCredits('Insufficient credits', { metadata: { resource: 'storage_egress' } })
+  }
+  try {
+    await confirmDownloadTraffic(deps, { eventId: trafficEventId })
+  } catch (error) {
+    await reverseDownloadTraffic(deps, {
+      orgId: image.orgId,
+      bytes: image.size,
+      eventId: trafficEventId,
+    })
+    await recordImageDownloadFailure(deps, image, 'internal')
+    throw error
+  }
 
   try {
-    await incrementAccessCount(db, image.id)
+    await deps.imageHosting.incrementAccessCount(image.id)
   } catch (error) {
     console.error('[image-hosting-domain] incrementAccessCount failed:', error)
   }
-  const res = c.redirect(url, 302)
-  res.headers.set('Cache-Control', 'no-store')
-  return res
+  await recordDownloadIssued(
+    deps,
+    { userId: null, actorType: 'anonymous', actorRef: null },
+    'image_hosting_download',
+    {
+      orgId: image.orgId,
+      targetType: 'image',
+      targetId: image.id,
+      targetName: image.path,
+      bytes: image.size,
+      source: 'custom_domain_image',
+      metadata: { imageId: image.id, storageId: image.storageId },
+    },
+    trafficEventId,
+  )
+  return new Response(null, {
+    status: 302,
+    headers: {
+      'Cache-Control': 'no-store',
+      Location: url,
+    },
+  })
+}
+
+function recordImageDownloadFailure(
+  deps: Deps,
+  image: { id: string; orgId: string; path: string; size: number; storageId: string },
+  reason: string,
+): Promise<void> {
+  return recordDownloadFailure(
+    deps,
+    { userId: null, actorType: 'anonymous', actorRef: null },
+    {
+      orgId: image.orgId,
+      targetType: 'image',
+      targetId: image.id,
+      targetName: image.path,
+      bytes: image.size,
+      source: 'custom_domain_image',
+      metadata: { imageId: image.id, storageId: image.storageId },
+    },
+    reason,
+  )
+}
+
+export interface ImageHostingDomainRequestOptions {
+  request: Request
+  deps: Deps
+  platform: Platform
+  appHosts: string[]
+  webDavMountPath: string
+}
+
+export async function handleImageHostingDomainRequest({
+  request,
+  deps,
+  platform,
+  appHosts,
+  webDavMountPath,
+}: ImageHostingDomainRequestOptions): Promise<Response | null> {
+  const path = requestPath(request)
+  if (isApplicationPath(path)) return null
+
+  const rawHost = request.headers.get('host') ?? new URL(request.url).host
+  const host = normalizeHost(rawHost)
+  if (!host || webDavMountPath === '') return null
+
+  if (
+    appHosts.some((candidate) => host === candidate || (candidate === 'workers.dev' && host.endsWith('.workers.dev')))
+  ) {
+    return null
+  }
+
+  const verificationPrefix = '/.well-known/zpan-domain-verification/'
+  if (request.method === 'GET' && path.startsWith(verificationPrefix)) {
+    const token = path.slice(verificationPrefix.length)
+    const [row, provider] = await Promise.all([
+      deps.imageHostingConfigs.getByDomain(host),
+      deps.imageDomains.getConfig(),
+    ])
+    if (
+      row?.customDomain &&
+      row.domainProvider === 'manual' &&
+      row.verificationToken === token &&
+      provider?.settings.enabled &&
+      provider.settings.provider === 'manual' &&
+      provider.lastTestedAt &&
+      !provider.error
+    ) {
+      const now = new Date()
+      await deps.imageHostingConfigs.update(row.orgId, {
+        domainStatus: 'verified',
+        domainError: null,
+        domainLastCheckedAt: now,
+        domainVerifiedAt: now,
+      })
+      await cacheVerifiedImageDomain(deps, host, row.orgId)
+      return new Response(token, {
+        status: 200,
+        headers: { 'Cache-Control': 'no-store', 'Content-Type': 'text/plain; charset=UTF-8' },
+      })
+    }
+    throw notFound('Domain verification not found')
+  }
+
+  const orgId = await resolveCachedImageDomain(deps, host)
+  if (!orgId) return null
+
+  const virtualPath = path.replace(/^\/ih(?:\/|$)/, '').replace(/^\/+/, '')
+  if (!virtualPath) return imageHostingNotFound(request)
+
+  return handleImageByPath(request, deps, platform, orgId, virtualPath)
 }
 
 // biome-ignore lint/suspicious/noConfusingVoidType: Next returns void; union with Response is intentional
 export async function imageHostingDomain(c: Context<Env>, next: Next): Promise<Response | void> {
-  const rawHost = c.req.header('host')
-  if (!rawHost) return next()
+  const response = await handleImageHostingDomainRequest({
+    request: c.req.raw,
+    deps: c.get('deps'),
+    platform: c.get('platform'),
+    appHosts: getAppHostCandidates(c),
+    webDavMountPath: c.get('webDavMountPath'),
+  })
+  return response ?? next()
+}
 
-  const host = normalizeHost(rawHost)
-  if (!host) return next()
+function isApplicationPath(path: string): boolean {
+  return path === '/api' || path.startsWith('/api/') || path === '/dav' || path.startsWith('/dav/')
+}
 
-  const appHosts = getAppHostCandidates(c)
-  if (appHosts.some((h) => host === h || host.endsWith(`.${h}`))) {
-    return next()
+function requestPath(request: Request): string {
+  const path = new URL(request.url).pathname
+  try {
+    return decodeURI(path)
+  } catch {
+    return path
   }
-
-  const db = c.get('platform').db
-  const orgId = await resolveCustomDomain(db, host)
-  if (!orgId) return next()
-
-  const virtualPath = c.req.path.replace(/^\/+/, '')
-  if (!virtualPath) return c.json({ error: 'path required' }, 404)
-
-  return handleImageByPath(c, orgId, virtualPath)
 }

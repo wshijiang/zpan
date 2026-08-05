@@ -12,11 +12,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { entitlementQueryKey } from '@/hooks/useEntitlement'
-import type { PairingInfo } from '@/lib/api'
-import { connectCloud, pollPairing } from '@/lib/api'
+import { entitlementQueryKey, licenseBindingQueryKey } from '@/hooks/useEntitlement'
+import { ApiError, connectCloud, type PairingInfo, pollPairing } from '@/lib/api'
 
-type PairingState = 'loading' | 'waiting' | 'denied' | 'expired' | 'error'
+type PairingState = 'loading' | 'waiting' | 'denied' | 'expired' | 'certError' | 'error'
 
 interface PairingModalProps {
   open: boolean
@@ -79,8 +78,11 @@ export function PairingModal({ open, onOpenChange }: PairingModalProps) {
           if (result.status === 'pending') return
           stopPolling()
           if (result.status === 'approved') {
-            await queryClient.invalidateQueries({ queryKey: entitlementQueryKey })
-            const status = queryClient.getQueryData<{ account_email?: string }>(entitlementQueryKey)
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: entitlementQueryKey }),
+              queryClient.invalidateQueries({ queryKey: licenseBindingQueryKey }),
+            ])
+            const status = queryClient.getQueryData<{ account_email?: string }>(licenseBindingQueryKey)
             const email = status?.account_email ?? ''
             toast.success(t('settings.billing.pairing.connected', { email }))
             onOpenChange(false)
@@ -89,9 +91,11 @@ export function PairingModal({ open, onOpenChange }: PairingModalProps) {
           } else {
             setState('expired')
           }
-        } catch {
+        } catch (err) {
           stopPolling()
-          setState('error')
+          // 502 = cloud approved the pairing but ZPan rejected the certificate
+          // (e.g. signed by an untrusted key). Distinct from a genuine timeout.
+          setState(err instanceof ApiError && err.status === 502 ? 'certError' : 'error')
         }
       }, 5000)
     },
@@ -127,7 +131,7 @@ export function PairingModal({ open, onOpenChange }: PairingModalProps) {
     onOpenChange(false)
   }
 
-  const isTerminal = state === 'denied' || state === 'expired' || state === 'error'
+  const isTerminal = state === 'denied' || state === 'expired' || state === 'certError' || state === 'error'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -179,9 +183,13 @@ export function PairingModal({ open, onOpenChange }: PairingModalProps) {
 
           {state === 'denied' && <p className="text-sm text-destructive">{t('settings.billing.pairing.denied')}</p>}
 
-          {(state === 'expired' || state === 'error') && (
-            <p className="text-sm text-destructive">{t('settings.billing.pairing.expired')}</p>
+          {state === 'expired' && <p className="text-sm text-destructive">{t('settings.billing.pairing.expired')}</p>}
+
+          {state === 'certError' && (
+            <p className="text-sm text-destructive">{t('settings.billing.pairing.certError')}</p>
           )}
+
+          {state === 'error' && <p className="text-sm text-destructive">{t('settings.billing.pairing.error')}</p>}
         </div>
 
         <DialogFooter className="flex-col gap-2 sm:flex-row">

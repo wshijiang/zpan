@@ -1,30 +1,62 @@
-import { ApiKeyTemplate } from '@shared/api-key-templates'
+import { type ApiKeyMetadata, ApiKeyTemplate } from '@shared/api-key-templates'
 import type { OAuthProviderConfig } from '@shared/oauth-providers'
 import type {
   AllowedImageMime,
   AnnouncementInput,
   CloudCreditBalanceResponse,
   CloudCreditLedgerResponse,
+  CompleteObjectUploadInput,
   ConflictStrategy,
   CreateBackgroundJobRequest,
   CreateDownloadTaskInput,
-  CreateObjectUploadSessionInput,
   CreateShareRequest,
   CreateStorageInput,
+  DiscountQuote,
   DownloaderHeartbeatInput,
   DownloadTaskActionInput,
-  PatchObjectUploadSessionInput,
+  EmailSettings,
+  ImageDomainProviderResponse,
+  OAuthConsentContext,
+  OAuthConsentResult,
+  OAuthConsentSubmit,
+  OAuthGrant,
+  OAuthGrantList,
+  PatchStorageInput,
   PresignObjectUploadPartsInput,
+  PublicProfile,
+  PublicUser,
   RedeemGiftCardResponse,
+  ReplaceStorageInput,
+  ShareObjectItem,
+  ShareObjectsResponse,
+  ShareReadmeResponse,
+  SiteConfig,
+  SiteSettings,
+  UpdateDownloaderCreditBillingInput,
   UpdateDownloaderInput,
   UpdateDownloadTaskInput,
-  UpdateStorageInput,
+  UpdateEmailSettingsInput,
+  UpdateImageDomainSettingsInput,
+  UpdateSiteCaptchaInput,
+  UpdateSiteIdentityInput,
+  UpdateSiteQuotasInput,
+  UpdateSiteRegistrationInput,
+  UpdateSiteWebDavInput,
+  UpdateStorageEgressBillingInput,
 } from '@shared/schemas'
 import type {
-  ActivityEvent,
   AdminAuditEvent,
+  AdminDashboardGrowthStats,
+  AdminDashboardOperationsStats,
+  AdminDashboardOverviewStats,
+  AdminDashboardSharingStats,
+  AdminDashboardStorageStats,
+  AdminDashboardTrafficStats,
+  AdminOverview,
   Announcement,
+  AuditEvent,
   AuthProvider,
+  AuthProviderList,
   BackgroundJob,
   BackgroundJobStatus,
   BindingState,
@@ -37,13 +69,18 @@ import type {
   CloudOrder,
   CloudProduct,
   CloudStoreTarget,
+  CursorPage,
   Downloader,
   DownloadTask,
+  DownloadTaskListItem,
+  DownloadTaskTimeline,
   IhostConfigResponse,
   ImageHosting,
   InstanceInfo,
+  LicenseEntitlements,
   Notification,
-  ObjectUploadSession,
+  ObjectListItem,
+  ObjectUploadInstructions,
   OrgQuota,
   OrgQuotaEntitlement,
   PaginatedResponse,
@@ -52,37 +89,45 @@ import type {
   SiteInvitation,
   Storage,
   StorageObject,
+  StorageUsageCategory,
+  StorageUsageItem,
+  StorageUsageResponse,
+  StorageUsageSortDirection,
+  StorageUsageSortField,
 } from '@shared/types'
 import {
-  adminAnnouncementsApi,
   adminAuditApi,
-  adminAuthProviders,
   adminDownloadersApi,
+  adminOverviewApi,
   adminQuotas,
   adminSiteInvitations,
+  adminTeams,
   announcementsApi,
   authedSharesApi,
   authProviders,
   backgroundJobsApi,
   brandingAdminApi,
   cloudStoreApi,
+  configzApi,
   downloaderSelfApi,
   downloadTasksApi,
-  downloadTasksUrlApi,
   emailConfig,
+  eventsUrlApi,
   ihostApi,
   ihostConfigApi,
+  imageDomainProviderApi,
   inviteCodes,
   licensingAdminApi,
   licensingApi,
-  meApi,
   notificationsApi,
+  oauthGrantsApi,
   objects,
-  profiles,
-  publicBrandingApi,
   publicSharesApi,
   publicSiteInvitations,
+  siteSettingsApi,
+  siteStatsApi,
   storages,
+  storageUsageApi,
   system,
   teamsApi,
   trash,
@@ -91,6 +136,60 @@ import {
 } from './rpc'
 
 export type { Storage, StorageObject }
+
+export function getSiteConfig() {
+  return unwrap<SiteConfig>(configzApi.index.$get())
+}
+
+export function getStorageUsage() {
+  return unwrap<StorageUsageResponse>(storageUsageApi.index.$get())
+}
+
+export function listStorageUsageItems(
+  category: StorageUsageCategory,
+  page = 1,
+  pageSize = 20,
+  sortBy: StorageUsageSortField = 'size',
+  sortDir: StorageUsageSortDirection = 'desc',
+) {
+  return unwrap<PaginatedResponse<StorageUsageItem>>(
+    storageUsageApi.items.$get({
+      query: { category, page: String(page), pageSize: String(pageSize), sortBy, sortDir },
+    }),
+  )
+}
+
+export function getSiteSettings() {
+  return unwrap<SiteSettings>(siteSettingsApi.index.$get())
+}
+
+export function getAdminOverview() {
+  return unwrap<AdminOverview>(adminOverviewApi.index.$get())
+}
+
+export function updateSiteIdentity(input: UpdateSiteIdentityInput) {
+  return unwrap<SiteSettings['identity']>(siteSettingsApi.identity.$put({ json: input }))
+}
+
+export function updateSiteRegistration(input: UpdateSiteRegistrationInput) {
+  return unwrap<SiteSettings['registration']>(siteSettingsApi.registration.$put({ json: input }))
+}
+
+export function updateSiteCaptcha(input: UpdateSiteCaptchaInput) {
+  return unwrap<SiteSettings['captcha']>(siteSettingsApi.captcha.$put({ json: input }))
+}
+
+export function updateSiteQuotas(input: UpdateSiteQuotasInput) {
+  return unwrap<SiteSettings['quotas']>(siteSettingsApi.quotas.$put({ json: input }))
+}
+
+export function updateSiteWebDav(input: UpdateSiteWebDavInput) {
+  return unwrap<SiteSettings['webdav']>(siteSettingsApi.webdav.$put({ json: input }))
+}
+
+export function verifySiteWebDav() {
+  return unwrap<SiteSettings['webdav']>(siteSettingsApi.webdav.verifications.$post())
+}
 
 export type UserQuota = Pick<
   OrgQuota,
@@ -111,130 +210,157 @@ export type UserQuota = Pick<
   | 'currentPlan'
 >
 
+export interface ErrorInfo {
+  reason: string
+  domain: string
+  metadata?: Record<string, string>
+}
+
 export interface ApiErrorBody {
-  error?: string
-  code?: string
-  [key: string]: unknown
+  error: {
+    code: number
+    message: string
+    status: string
+    details?: ErrorInfo[]
+  }
 }
 
 export class ApiError extends Error {
   readonly status: number
   readonly body: ApiErrorBody
+  readonly reason: string | undefined
+  readonly metadata: Record<string, string> | undefined
+  readonly canonicalStatus: string | undefined
   constructor(status: number, body: ApiErrorBody) {
-    super(body.error ?? `HTTP ${status}`)
+    super(body.error.message)
     this.name = 'ApiError'
     this.status = status
     this.body = body
+    this.reason = body.error.details?.[0]?.reason
+    this.metadata = body.error.details?.[0]?.metadata
+    this.canonicalStatus = body.error.status
   }
 }
 
-export interface NameConflictBody extends ApiErrorBody {
-  code: 'NAME_CONFLICT'
-  conflictingName: string
-  conflictingId: string
+// Normalizes any error payload into the AIP-193 `google.rpc.Status` body the
+// server now returns. Real server errors pass through; network failures,
+// non-JSON responses, and external (S3) fallbacks are wrapped synthetically.
+function toErrorBody(status: number, raw: unknown): ApiErrorBody {
+  if (raw && typeof raw === 'object' && 'error' in raw) {
+    const error = (raw as { error: unknown }).error
+    if (error && typeof error === 'object') return raw as ApiErrorBody
+    return {
+      error: {
+        code: status,
+        message: typeof error === 'string' ? error : `HTTP ${status}`,
+        status: '',
+        details: [],
+      },
+    }
+  }
+  return {
+    error: { code: status, message: `HTTP ${status}`, status: '', details: [] },
+  }
 }
 
-export function isNameConflictError(err: unknown): err is ApiError & { body: NameConflictBody } {
-  return err instanceof ApiError && err.status === 409 && err.body.code === 'NAME_CONFLICT'
+const SESSION_REQUEST_TIMEOUT_MS = 10_000
+
+export function isNameConflictError(
+  err: unknown,
+): err is ApiError & { metadata: { conflictingName: string; conflictingId: string } } {
+  return err instanceof ApiError && err.status === 409 && err.reason === 'NAME_CONFLICT'
 }
 
 async function unwrap<T>(promise: Promise<Response>): Promise<T> {
   const res = await promise
   if (!res.ok) {
-    const parsed = (await res.json().catch(() => ({}))) as ApiErrorBody
-    const body: ApiErrorBody = { ...parsed, error: parsed.error ?? res.statusText }
-    throw new ApiError(res.status, body)
+    const parsed = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, toErrorBody(res.status, parsed))
   }
   return res.json() as Promise<T>
 }
 
-// Objects API
-
-export function listObjects(parent: string, status = 'active', page = 1, pageSize = 500) {
-  return unwrap<PaginatedResponse<StorageObject>>(
-    objects.index.$get({ query: { parent, status, page: String(page), pageSize: String(pageSize) } }),
-  )
+// Counterpart to unwrap for 204 No Content responses: validate, return nothing.
+async function discard(promise: Promise<Response>): Promise<void> {
+  const res = await promise
+  if (!res.ok) {
+    const parsed = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, toErrorBody(res.status, parsed))
+  }
 }
+
+// Objects API — lists live objects only (the recycle bin is listTrash).
 
 export function listObjectsByPath(
   path: string,
-  status = 'active',
-  page = 1,
-  pageSize = 500,
-  opts?: { type?: string; search?: string },
+  pageToken: string | undefined = undefined,
+  pageSize = 100,
+  opts?: { type?: string; search?: string; orgId?: string },
 ) {
-  const query: Record<string, string> = { path, status, page: String(page), pageSize: String(pageSize) }
+  const query: Record<string, string> = { path, pageSize: String(pageSize) }
+  if (pageToken) query.pageToken = pageToken
   if (opts?.type) query.type = opts.type
   if (opts?.search) query.search = opts.search
-  return unwrap<PaginatedResponse<StorageObject>>(objects.index.$get({ query }))
+  if (opts?.orgId) query.orgId = opts.orgId
+  return unwrap<CursorPage<ObjectListItem>>(objects.index.$get({ query }))
 }
 
 export function getObject(id: string) {
   return unwrap<StorageObject & { downloadUrl?: string }>(objects[':id'].$get({ param: { id } }))
 }
 
+// POST /api/objects returns a folder, or a file draft with `upload` instructions:
+// the server-decided part size and one presigned PUT URL per slice.
 export interface CreateObjectResult extends StorageObject {
-  uploadUrl?: string
-  contentDisposition?: string
+  upload?: ObjectUploadInstructions
 }
 
 export function createObject(data: {
   name: string
-  type: string
+  type?: string
   size?: number
   parent: string
   dirtype: number
   onConflict?: ConflictStrategy
+  storageId?: string
 }) {
   return unwrap<CreateObjectResult>(objects.index.$post({ json: data }))
 }
 
 export function updateObject(id: string, data: { name?: string; parent?: string; onConflict?: ConflictStrategy }) {
-  return unwrap<StorageObject>(objects[':id'].$patch({ param: { id }, json: { action: 'update' as const, ...data } }))
+  return unwrap<StorageObject>(objects[':id'].$patch({ param: { id }, json: data }))
 }
 
-export function confirmUpload(id: string, onConflict?: ConflictStrategy) {
+// Finalize an upload (draft → live): the client has PUT every slice and read each
+// ETag. Returns the live object.
+export function completeObjectUpload(id: string, uploadSessionId: string, parts: CompleteObjectUploadInput['parts']) {
   return unwrap<StorageObject>(
-    objects[':id'].$patch({ param: { id }, json: { action: 'confirm' as const, onConflict } }),
+    objects[':id'].uploads[':uploadSessionId'].completions.$post({ param: { id, uploadSessionId }, json: { parts } }),
   )
 }
 
-export function cancelUpload(id: string) {
-  return unwrap<{ id: string; cancelled: boolean }>(
-    objects[':id'].$patch({ param: { id }, json: { action: 'cancel' as const } }),
+// Abort an in-progress upload and discard the draft.
+export function abortObjectUpload(id: string, uploadSessionId: string, opts: { strictStorageCleanup?: boolean } = {}) {
+  return discard(
+    objects[':id'].uploads[':uploadSessionId'].$delete({
+      param: { id, uploadSessionId },
+      query: opts.strictStorageCleanup ? { strictStorageCleanup: '1' } : {},
+    }),
   )
 }
 
-export function deleteObject(id: string) {
-  return unwrap<{ id: string; deleted: boolean; purged?: number }>(objects[':id'].$delete({ param: { id } }))
-}
-
-export function copyObject(id: string, parent: string, onConflict?: ConflictStrategy) {
-  return unwrap<StorageObject>(objects.copy.$post({ json: { copyFrom: id, parent, onConflict } }))
-}
-
-export function trashObject(id: string) {
-  return unwrap<StorageObject>(objects[':id'].$patch({ param: { id }, json: { action: 'trash' as const } }))
-}
-
-export function restoreObject(id: string, onConflict?: ConflictStrategy) {
-  return unwrap<StorageObject>(
-    objects[':id'].$patch({ param: { id }, json: { action: 'restore' as const, onConflict } }),
-  )
-}
-
-export function emptyTrash() {
-  return unwrap<{ purged: number }>(trash.index.$delete())
-}
-
-export function createObjectUploadSession(id: string, data: CreateObjectUploadSessionInput) {
-  return unwrap<ObjectUploadSession & { object: StorageObject }>(
-    objects[':id'].uploads.$post({ param: { id }, json: data }),
-  )
-}
-
+// Re-presign expired part URLs mid-upload (multipart only); the happy path uses
+// the URLs from createObject.
 export function presignObjectUploadParts(id: string, uploadSessionId: string, data: PresignObjectUploadPartsInput) {
-  return unwrap<{ parts: Array<{ partNumber: number; uploadUrl: string }> }>(
+  return unwrap<{
+    uploadId: string | null
+    mode: 'multipart'
+    partSize: number
+    partCount: number
+    presignedExpiresAt: string
+    requiredHeaders: Record<string, string>
+    parts: ObjectUploadInstructions['parts']
+  }>(
     objects[':id'].uploads[':uploadSessionId'].parts.$post({
       param: { id, uploadSessionId },
       json: data,
@@ -242,40 +368,78 @@ export function presignObjectUploadParts(id: string, uploadSessionId: string, da
   )
 }
 
-export function patchObjectUploadSession(id: string, uploadSessionId: string, data: PatchObjectUploadSessionInput) {
-  return unwrap<ObjectUploadSession & { object?: StorageObject }>(
-    objects[':id'].uploads[':uploadSessionId'].$patch({
-      param: { id, uploadSessionId },
-      json: data,
+// Soft delete: move a live object to trash (DELETE /api/objects/:id → 204).
+export function deleteObject(id: string) {
+  return discard(objects[':id'].$delete({ param: { id } }))
+}
+
+export function copyObject(id: string, parent: string, onConflict?: ConflictStrategy) {
+  return unwrap<StorageObject>(objects[':id'].copies.$post({ param: { id }, json: { parent, onConflict } }))
+}
+
+export interface TransferObjectResult {
+  saved: StorageObject[]
+  skipped: Array<{ name: string; reason: string }>
+  sourceDeleted: boolean
+}
+
+export function transferObject(
+  id: string,
+  input: { targetOrgId: string; targetParent: string; mode: 'copy' | 'move' },
+) {
+  return unwrap<TransferObjectResult>(objects[':id'].transfers.$post({ param: { id }, json: input }))
+}
+
+// ── Trash (the /objects grouping for trashed items) ──────────────────────────
+
+// Lists trashed objects, roots only (a trashed folder is one entry).
+export function listTrash(opts: { pageToken?: string; pageSize?: number } = {}) {
+  return unwrap<CursorPage<StorageObject>>(
+    trash.objects.$get({
+      query: {
+        pageSize: String(opts.pageSize ?? 20),
+        ...(opts.pageToken ? { pageToken: opts.pageToken } : {}),
+      },
     }),
   )
+}
+
+export function getTrashObject(id: string) {
+  return unwrap<StorageObject>(trash.objects[':id'].$get({ param: { id } }))
+}
+
+export function restoreObject(id: string, onConflict?: ConflictStrategy) {
+  return unwrap<StorageObject>(trash.objects[':id'].restorations.$post({ param: { id }, json: { onConflict } }))
+}
+
+// Permanently delete one trashed root (recursive subtree purge, DELETE → 204).
+export function purgeTrashObject(id: string) {
+  return discard(trash.objects[':id'].$delete({ param: { id } }))
 }
 
 // Remote Download API
 
 export interface ListDownloadTasksOptions {
   status?: string
-  assignedTo?: 'me'
   category?: string
   tag?: string
-  sortBy?: 'createdAt' | 'source' | 'category' | 'tags' | 'status' | 'progress' | 'eta'
-  sortDir?: 'asc' | 'desc'
-  page?: number
   pageSize?: number
+  pageToken?: string
 }
 
 export function listDownloadTasks(opts: ListDownloadTasksOptions = {}) {
   const query: Record<string, string> = {
-    page: String(opts.page ?? 1),
     pageSize: String(opts.pageSize ?? 50),
   }
   if (opts.status) query.status = opts.status
-  if (opts.assignedTo) query.assignedTo = opts.assignedTo
   if (opts.category) query.category = opts.category
   if (opts.tag) query.tag = opts.tag
-  if (opts.sortBy) query.sortBy = opts.sortBy
-  if (opts.sortDir) query.sortDir = opts.sortDir
-  return unwrap<PaginatedResponse<DownloadTask>>(downloadTasksApi.index.$get({ query }))
+  if (opts.pageToken) query.pageToken = opts.pageToken
+  return unwrap<CursorPage<DownloadTaskListItem>>(downloadTasksApi.index.$get({ query }))
+}
+
+export function getDownloadTask(id: string) {
+  return unwrap<DownloadTask>(downloadTasksApi[':id'].$get({ param: { id } }))
 }
 
 export function createDownloadTask(data: CreateDownloadTaskInput) {
@@ -286,22 +450,27 @@ export function updateDownloadTask(id: string, data: UpdateDownloadTaskInput) {
   return unwrap<DownloadTask>(downloadTasksApi[':id'].$patch({ param: { id }, json: data }))
 }
 
-export type DownloadTaskActionResult = DownloadTask | { id: string; deleted: true }
-
-export function runDownloadTaskAction(id: string, action: DownloadTaskActionInput['action']) {
-  return unwrap<DownloadTaskActionResult>(downloadTasksApi[':id'].actions.$post({ param: { id }, json: { action } }))
+export function listDownloadTaskEvents(id: string) {
+  return unwrap<DownloadTaskTimeline>(downloadTasksApi[':id'].events.$get({ param: { id } }))
 }
 
-export function downloadTaskEventsUrl(
-  opts: Pick<ListDownloadTasksOptions, 'status' | 'category' | 'tag' | 'sortBy' | 'sortDir'> = {},
-) {
-  const query: Record<string, string> = { page: '1', pageSize: '50' }
-  if (opts.status) query.status = opts.status
-  if (opts.category) query.category = opts.category
-  if (opts.tag) query.tag = opts.tag
-  if (opts.sortBy) query.sortBy = opts.sortBy
-  if (opts.sortDir) query.sortDir = opts.sortDir
-  return downloadTasksUrlApi.events.$url({ query })
+export function runDownloadTaskAction(id: string, action: DownloadTaskActionInput['action']) {
+  if (action === 'delete') {
+    return discard(downloadTasksApi[':id'].$delete({ param: { id } }))
+  }
+  if (action === 'retry' || action === 'restart') {
+    return unwrap<DownloadTask>(
+      downloadTasksApi[':id'].attempts.$post({ param: { id }, json: { fresh: action === 'restart' } }),
+    )
+  }
+  const status =
+    action === 'pause' ? ('paused' as const) : action === 'resume' ? ('queued' as const) : ('canceled' as const)
+  return unwrap<DownloadTask>(downloadTasksApi[':id'].status.$put({ param: { id }, json: { status } }))
+}
+
+// Unified server-sent events stream consumed by the authenticated application shell.
+export function serverEventsUrl() {
+  return eventsUrlApi.index.$url()
 }
 
 export function listDownloaders() {
@@ -312,12 +481,16 @@ export function updateDownloader(id: string, data: UpdateDownloaderInput) {
   return unwrap<Downloader>(adminDownloadersApi[':id'].$patch({ param: { id }, json: data }))
 }
 
+export function updateDownloaderCreditBilling(id: string, data: UpdateDownloaderCreditBillingInput) {
+  return unwrap<Downloader>(adminDownloadersApi[':id']['credit-billing'].$put({ param: { id }, json: data }))
+}
+
 export function deleteDownloader(id: string) {
-  return unwrap<{ id: string; deleted: true }>(adminDownloadersApi[':id'].$delete({ param: { id } }))
+  return discard(adminDownloadersApi[':id'].$delete({ param: { id } }))
 }
 
 export function sendDownloaderHeartbeat(data: DownloaderHeartbeatInput) {
-  return unwrap<Downloader>(downloaderSelfApi.heartbeat.$post({ json: data }))
+  return unwrap<Downloader>(downloaderSelfApi.me.heartbeats.$post({ json: data }))
 }
 
 // Background Jobs API
@@ -325,19 +498,23 @@ export function sendDownloaderHeartbeat(data: DownloaderHeartbeatInput) {
 export interface ListBackgroundJobsOptions {
   status?: BackgroundJobStatus
   type?: string
-  page?: number
   pageSize?: number
+  pageToken?: string
 }
 
 export function listBackgroundJobs(opts: ListBackgroundJobsOptions = {}) {
   const query: Record<string, string> = {
-    page: String(opts.page ?? 1),
     pageSize: String(opts.pageSize ?? 20),
   }
   if (opts.status) query.status = opts.status
   if (opts.type) query.type = opts.type
+  if (opts.pageToken) query.pageToken = opts.pageToken
 
-  return unwrap<PaginatedResponse<BackgroundJob>>(backgroundJobsApi.index.$get({ query }))
+  return unwrap<CursorPage<BackgroundJob>>(backgroundJobsApi.index.$get({ query }))
+}
+
+export function getActiveBackgroundJobCount() {
+  return unwrap<{ activeCount: number }>(backgroundJobsApi.stats.$get())
 }
 
 export function createBackgroundJob(data: CreateBackgroundJobRequest) {
@@ -349,11 +526,53 @@ export function getBackgroundJob(id: string) {
 }
 
 export function cancelBackgroundJob(id: string) {
-  return unwrap<BackgroundJob>(backgroundJobsApi[':id'].cancel.$post({ param: { id } }))
+  return unwrap<BackgroundJob>(
+    backgroundJobsApi[':id'].status.$put({ param: { id }, json: { status: 'canceled' as const } }),
+  )
 }
 
 export function retryBackgroundJob(id: string) {
-  return unwrap<BackgroundJob>(backgroundJobsApi[':id'].retry.$post({ param: { id } }))
+  return unwrap<BackgroundJob>(backgroundJobsApi[':id'].retries.$post({ param: { id } }))
+}
+
+// Admin dashboard stats
+
+export interface AdminStatsRangeFilter {
+  from?: string
+  to?: string
+  timeZone?: 'UTC'
+}
+
+function statsRangeQuery(filter: AdminStatsRangeFilter = {}): Record<string, string> {
+  const query: Record<string, string> = {}
+  if (filter.from) query.from = filter.from
+  if (filter.to) query.to = filter.to
+  if (filter.timeZone) query.timeZone = filter.timeZone
+  return query
+}
+
+export function getAdminDashboardOverviewStats(filter: AdminStatsRangeFilter = {}) {
+  return unwrap<AdminDashboardOverviewStats>(siteStatsApi.overview.$get({ query: statsRangeQuery(filter) }))
+}
+
+export function getAdminDashboardOperationsStats(filter: AdminStatsRangeFilter = {}) {
+  return unwrap<AdminDashboardOperationsStats>(siteStatsApi.operations.$get({ query: statsRangeQuery(filter) }))
+}
+
+export function getAdminDashboardGrowthStats(filter: AdminStatsRangeFilter = {}) {
+  return unwrap<AdminDashboardGrowthStats>(siteStatsApi.growth.$get({ query: statsRangeQuery(filter) }))
+}
+
+export function getAdminDashboardStorageStats(filter: AdminStatsRangeFilter = {}) {
+  return unwrap<AdminDashboardStorageStats>(siteStatsApi.storage.$get({ query: statsRangeQuery(filter) }))
+}
+
+export function getAdminDashboardTrafficStats(filter: AdminStatsRangeFilter = {}) {
+  return unwrap<AdminDashboardTrafficStats>(siteStatsApi.traffic.$get({ query: statsRangeQuery(filter) }))
+}
+
+export function getAdminDashboardSharingStats(filter: AdminStatsRangeFilter = {}) {
+  return unwrap<AdminDashboardSharingStats>(siteStatsApi.sharing.$get({ query: statsRangeQuery(filter) }))
 }
 
 // Admin Storages API
@@ -370,63 +589,31 @@ export function getStorage(id: string) {
   return unwrap<Storage>(storages[':id'].$get({ param: { id } }))
 }
 
-export function updateStorage(id: string, data: UpdateStorageInput) {
+export function replaceStorage(id: string, data: ReplaceStorageInput) {
   return unwrap<Storage>(storages[':id'].$put({ param: { id }, json: data }))
 }
 
+export function patchStorage(id: string, data: PatchStorageInput) {
+  return unwrap<Storage>(storages[':id'].$patch({ param: { id }, json: data }))
+}
+
+export function updateStorageEgressBilling(id: string, data: UpdateStorageEgressBillingInput) {
+  return unwrap<Storage>(storages[':id']['egress-billing'].$put({ param: { id }, json: data }))
+}
+
 export function deleteStorage(id: string) {
-  return unwrap<{ id: string; deleted: boolean }>(storages[':id'].$delete({ param: { id } }))
+  return discard(storages[':id'].$delete({ param: { id } }))
 }
 
-// Admin Users API
-
-export interface UserWithOrg {
-  id: string
-  name: string
-  username: string
-  email: string
-  image: string | null
-  role: string | null
-  banned: boolean
-  createdAt: number
-  orgId: string | null
-  orgName: string | null
-  quotaUsed: number
-  quotaDefault: number
-  quotaTotal: number
-}
+// User entitlements API (admin). User identity, listing, disable/enable and
+// delete are served directly by better-auth's /api/auth/admin/* endpoints (see
+// the admin client in auth-client.ts). Only the personal-org storage
+// entitlements stay here, in our own quota domain, keyed by user id.
 
 export type UserEntitlementsResponse = { orgId: string; items: OrgQuotaEntitlement[] }
 
-export function listUsers(page: number, pageSize: number, search?: string) {
-  const query: Record<string, string> = { page: String(page), pageSize: String(pageSize) }
-  if (search?.trim()) query.search = search.trim()
-  return unwrap<{ items: UserWithOrg[]; total: number }>(users.index.$get({ query }))
-}
-
-export function getUser(userId: string) {
-  return unwrap<UserWithOrg>(users[':id'].$get({ param: { id: userId } }))
-}
-
-export function updateUserStatus(userId: string, status: 'active' | 'disabled') {
-  return unwrap<{ id: string; status: string }>(users[':id'].$patch({ param: { id: userId }, json: { status } }))
-}
-
-export function deleteUser(userId: string) {
-  return unwrap<{ id: string; deleted: boolean }>(users[':id'].$delete({ param: { id: userId } }))
-}
-
-export function batchUpdateUserStatus(ids: string[], status: 'active' | 'disabled') {
-  const action = status === 'disabled' ? 'disable' : 'enable'
-  return unwrap<{ updated: number; ids: string[]; status: string }>(users.batch.$patch({ json: { action, ids } }))
-}
-
-export function batchDeleteUsers(ids: string[]) {
-  return unwrap<{ deleted: number; ids: string[] }>(users.batch.$delete({ json: { ids } }))
-}
-
 export function listUserEntitlements(userId: string) {
-  return unwrap<UserEntitlementsResponse>(users[':id'].entitlements.$get({ param: { id: userId } }))
+  return unwrap<UserEntitlementsResponse>(users[':userId'].entitlements.$get({ param: { userId } }))
 }
 
 export function grantUserEntitlement(
@@ -434,7 +621,7 @@ export function grantUserEntitlement(
   data: { resourceType: 'storage'; bytes: number; expiresAt?: string | null; note?: string | null },
 ) {
   return unwrap<{ orgId: string; entitlement: OrgQuotaEntitlement }>(
-    users[':id'].entitlements.$post({ param: { id: userId }, json: data }),
+    users[':userId'].entitlements.$post({ param: { userId }, json: data }),
   )
 }
 
@@ -444,14 +631,12 @@ export function updateUserEntitlement(
   data: { bytes?: number; expiresAt?: string | null; note?: string | null },
 ) {
   return unwrap<{ orgId: string; entitlement: OrgQuotaEntitlement }>(
-    users[':id'].entitlements[':eid'].$patch({ param: { id: userId, eid: entitlementId }, json: data }),
+    users[':userId'].entitlements[':eid'].$patch({ param: { userId, eid: entitlementId }, json: data }),
   )
 }
 
 export function revokeUserEntitlement(userId: string, entitlementId: string) {
-  return unwrap<{ orgId: string; entitlement: OrgQuotaEntitlement }>(
-    users[':id'].entitlements[':eid'].$delete({ param: { id: userId, eid: entitlementId } }),
-  )
+  return discard(users[':userId'].entitlements[':eid'].$delete({ param: { userId, eid: entitlementId } }))
 }
 
 // Admin Quotas API
@@ -475,6 +660,66 @@ export type QuotaItem = Pick<
 
 export function listQuotas() {
   return unwrap<{ items: QuotaItem[]; total: number }>(adminQuotas.index.$get())
+}
+
+export type AdminUserQuota = { used: number; total: number; hasPersonalOrg: boolean }
+
+// A single user's storage used/total — a user sub-resource the admin UI fans out
+// over (Promise.all) to enrich better-auth's admin list, which knows identity but
+// not quota. (Distinct from getUserQuota(), which returns the caller's own quota.)
+export function getUserQuotaById(userId: string) {
+  return unwrap<AdminUserQuota>(users[':userId'].quota.$get({ param: { userId } }))
+}
+
+// Admin Teams API
+
+export interface TeamSummary {
+  id: string
+  name: string
+  slug: string
+  logo: string | null
+  memberCount: number
+  ownerName: string | null
+  quotaUsed: number
+  quotaTotal: number
+  createdAt: number
+}
+
+export function listTeams() {
+  return unwrap<{ items: TeamSummary[]; total: number }>(adminTeams.index.$get())
+}
+
+export function getTeam(orgId: string) {
+  return unwrap<TeamSummary>(adminTeams[':teamId'].$get({ param: { teamId: orgId } }))
+}
+
+export function listOrgEntitlements(orgId: string) {
+  return unwrap<{ orgId: string; items: OrgQuotaEntitlement[] }>(
+    adminTeams[':teamId'].entitlements.$get({ param: { teamId: orgId } }),
+  )
+}
+
+export function grantOrgEntitlement(
+  orgId: string,
+  data: { resourceType: 'storage'; bytes: number; expiresAt?: string | null; note?: string | null },
+) {
+  return unwrap<{ orgId: string; entitlement: OrgQuotaEntitlement }>(
+    adminTeams[':teamId'].entitlements.$post({ param: { teamId: orgId }, json: data }),
+  )
+}
+
+export function updateOrgEntitlement(
+  orgId: string,
+  entitlementId: string,
+  data: { bytes?: number; expiresAt?: string | null; note?: string | null },
+) {
+  return unwrap<{ orgId: string; entitlement: OrgQuotaEntitlement }>(
+    adminTeams[':teamId'].entitlements[':eid'].$patch({ param: { teamId: orgId, eid: entitlementId }, json: data }),
+  )
+}
+
+export function revokeOrgEntitlement(orgId: string, entitlementId: string) {
+  return discard(adminTeams[':teamId'].entitlements[':eid'].$delete({ param: { teamId: orgId, eid: entitlementId } }))
 }
 
 // User Quotas API
@@ -509,10 +754,14 @@ export function redeemCloudGiftCard(code: string) {
   return unwrap<RedeemGiftCardResponse>(cloudStoreApi.credits.redemptions.$post({ json: { code } }))
 }
 
-export function createCloudCheckout(packageId: string, priceId?: string) {
+export function createCloudCheckout(packageId: string, priceId?: string, promotionCode?: string) {
   return unwrap<{ orderId: string; url: string; paymentId?: string }>(
-    cloudStoreApi.checkouts.$post({ json: { packageId, priceId } }),
+    cloudStoreApi.checkouts.$post({ json: { packageId, priceId, promotionCode } }),
   )
+}
+
+export function createDiscountQuote(code: string, priceId: string) {
+  return unwrap<DiscountQuote>(cloudStoreApi['discount-quotes'].$post({ json: { code, priceId } }))
 }
 
 export function createCloudBillingPortalSession() {
@@ -527,7 +776,7 @@ export function continueCloudOrderPayment(orderId: string) {
 
 export function cancelCloudOrder(orderId: string) {
   return unwrap<CloudOrder>(
-    cloudStoreApi.orders[':orderId'].$patch({ param: { orderId }, json: { status: 'canceled' } }),
+    cloudStoreApi.orders[':orderId'].status.$put({ param: { orderId }, json: { status: 'canceled' } }),
   )
 }
 
@@ -539,48 +788,20 @@ export function listCloudOrders(options: { limit?: number; offset?: number } = {
   return unwrap<{ items: CloudOrder[]; total: number }>(cloudStoreApi.orders.$get({ query }))
 }
 
-// System Options API
-
-export interface SiteOption {
-  key: string
-  value: string
-  public: boolean
-}
-
-export function listSystemOptions() {
-  return unwrap<{ items: SiteOption[]; total: number }>(system.options.$get())
-}
-
-export function getSystemOption(key: string) {
-  return unwrap<SiteOption>(system.options[':key'].$get({ param: { key } }))
-}
-
-export function setSystemOption(key: string, value: string, isPublic?: boolean) {
-  const body: { value: string; public?: boolean } = { value }
-  if (isPublic !== undefined) body.public = isPublic
-  return unwrap<SiteOption>(system.options[':key'].$put({ param: { key }, json: body }))
-}
-
 // Auth Providers API
 
 export type { AuthProvider }
 
 export function listAuthProviders() {
-  return unwrap<{ items: AuthProvider[] }>(authProviders.index.$get())
-}
-
-export function listAdminAuthProviders() {
-  return unwrap<{ items: OAuthProviderConfig[] }>(adminAuthProviders.index.$get())
+  return unwrap<AuthProviderList>(authProviders.index.$get())
 }
 
 export function upsertAuthProvider(providerId: string, data: Omit<OAuthProviderConfig, 'providerId'>) {
-  return unwrap<OAuthProviderConfig>(adminAuthProviders[':providerId'].$put({ param: { providerId }, json: data }))
+  return unwrap<AuthProvider>(authProviders[':providerId'].$put({ param: { providerId }, json: data }))
 }
 
 export function deleteAuthProvider(providerId: string) {
-  return unwrap<{ providerId: string; deleted: boolean }>(
-    adminAuthProviders[':providerId'].$delete({ param: { providerId } }),
-  )
+  return discard(authProviders[':providerId'].$delete({ param: { providerId } }))
 }
 
 // Invite Codes API
@@ -608,7 +829,7 @@ export function generateInviteCodes(count: number, expiresInDays?: number) {
 }
 
 export function deleteInviteCode(id: string) {
-  return unwrap<{ id: string; deleted: boolean }>(inviteCodes[':id'].$delete({ param: { id } }))
+  return discard(inviteCodes[':id'].$delete({ param: { id } }))
 }
 
 // Site Invitations API
@@ -624,48 +845,23 @@ export function createSiteInvitation(email: string) {
 }
 
 export function resendSiteInvitation(id: string) {
-  return unwrap<SiteInvitation>(adminSiteInvitations[':id'].resend.$post({ param: { id } }))
+  return unwrap<SiteInvitation>(adminSiteInvitations[':id'].deliveries.$post({ param: { id } }))
 }
 
 export function revokeSiteInvitation(id: string) {
-  return unwrap<{ id: string; revoked: boolean }>(adminSiteInvitations[':id'].$delete({ param: { id } }))
+  return discard(adminSiteInvitations[':id'].$delete({ param: { id } }))
 }
 
 export function getSiteInvitation(token: string) {
   return unwrap<SiteInvitation>(publicSiteInvitations[':token'].$get({ param: { token } }))
 }
 
-// Email Config API
+// Email settings API
 
-export interface SmtpEmailConfig {
-  enabled: boolean
-  provider: 'smtp'
-  from: string
-  smtp: { host: string; port: number; user: string; pass: string; secure: boolean }
-}
-
-export interface HttpEmailConfig {
-  enabled: boolean
-  provider: 'http'
-  from: string
-  http: { url: string; apiKey: string }
-}
-
-export interface CloudflareEmailConfig {
-  enabled: boolean
-  provider: 'cloudflare'
-  from: string
-}
-
-export type EmailConfigData = SmtpEmailConfig | HttpEmailConfig | CloudflareEmailConfig
-
-export interface EmptyEmailConfigData {
-  enabled: boolean
-  provider: null
-}
+export type EmailConfigData = UpdateEmailSettingsInput
 
 export function getEmailConfig() {
-  return unwrap<EmailConfigData | EmptyEmailConfigData>(emailConfig.index.$get())
+  return unwrap<EmailSettings>(emailConfig.index.$get())
 }
 
 export function saveEmailConfig(data: EmailConfigData) {
@@ -676,26 +872,34 @@ export function testEmail(to: string) {
   return unwrap<{ success: boolean; error?: string }>(emailConfig['test-messages'].$post({ json: { to } }))
 }
 
+// Image custom-domain provider API
+
+export type ImageDomainProviderData = UpdateImageDomainSettingsInput
+
+export function getImageDomainProvider() {
+  return unwrap<ImageDomainProviderResponse>(imageDomainProviderApi.index.$get())
+}
+
+export function saveImageDomainProvider(data: ImageDomainProviderData) {
+  return unwrap<{ success: true }>(imageDomainProviderApi.index.$put({ json: data }))
+}
+
+export function testImageDomainProvider() {
+  return unwrap<{ success: true }>(imageDomainProviderApi.tests.$post())
+}
+
 // Profile API (public, no auth)
 
-export interface PublicUser {
-  username: string
-  name: string
-  image: string | null
-}
-
-export interface PublicMatter extends StorageObject {
-  downloadUrl?: string
-}
+export type { PublicUser }
 
 export function getProfile(username: string) {
-  return unwrap<{ user: PublicUser; shares: PublicMatter[] }>(profiles[':username'].$get({ param: { username } }))
+  return unwrap<PublicProfile>(users[':username'].$get({ param: { username } }))
 }
 
 // Teams Activity API
 
 export function listTeamActivities(teamId: string, page = 1, pageSize = 20) {
-  return unwrap<PaginatedResponse<ActivityEvent>>(
+  return unwrap<PaginatedResponse<AuditEvent>>(
     teamsApi[':teamId'].activity.$get({ param: { teamId }, query: { page: String(page), pageSize: String(pageSize) } }),
   )
 }
@@ -704,16 +908,17 @@ export function listTeamActivities(teamId: string, page = 1, pageSize = 20) {
 
 export type NotificationListResult = {
   items: Notification[]
-  total: number
-  unreadCount: number
-  page: number
-  pageSize: number
+  nextPageToken: string | null
 }
 
-export function listNotifications(page = 1, pageSize = 20, unreadOnly = false) {
+export function listNotifications(opts: { pageToken?: string; pageSize?: number; unreadOnly?: boolean } = {}) {
   return unwrap<NotificationListResult>(
     notificationsApi.index.$get({
-      query: { page: String(page), pageSize: String(pageSize), unread: String(unreadOnly) },
+      query: {
+        pageSize: String(opts.pageSize ?? 20),
+        unread: String(opts.unreadOnly ?? false),
+        ...(opts.pageToken ? { pageToken: opts.pageToken } : {}),
+      },
     }),
   )
 }
@@ -724,7 +929,7 @@ export function getUnreadCount() {
 
 export function markNotificationRead(id: string) {
   return notificationsApi[':id'].$patch({ param: { id } }).then((res) => {
-    if (!res.ok) throw new ApiError(res.status, { error: res.statusText })
+    if (!res.ok) throw new ApiError(res.status, toErrorBody(res.status, { error: res.statusText }))
   })
 }
 
@@ -756,50 +961,60 @@ export function listActiveAnnouncements() {
 }
 
 export function listAdminAnnouncements(page = 1, pageSize = 20, status?: Announcement['status']) {
-  const query: { page: string; pageSize: string; status?: Announcement['status'] } = {
+  const query: { scope: 'all'; page: string; pageSize: string; status?: Announcement['status'] } = {
+    scope: 'all',
     page: String(page),
     pageSize: String(pageSize),
   }
   if (status) query.status = status
-  return unwrap<AnnouncementListResult>(adminAnnouncementsApi.index.$get({ query }))
+  return unwrap<AnnouncementListResult>(announcementsApi.index.$get({ query }))
 }
 
 export function createAnnouncement(data: AnnouncementInput) {
-  return unwrap<Announcement>(adminAnnouncementsApi.index.$post({ json: data }))
+  return unwrap<Announcement>(announcementsApi.index.$post({ json: data }))
 }
 
 export function getAnnouncement(id: string) {
-  return unwrap<Announcement>(adminAnnouncementsApi[':id'].$get({ param: { id } }))
+  return unwrap<Announcement>(announcementsApi[':id'].$get({ param: { id } }))
 }
 
 export function updateAnnouncement(id: string, data: AnnouncementInput) {
-  return unwrap<Announcement>(adminAnnouncementsApi[':id'].$put({ param: { id }, json: data }))
+  return unwrap<Announcement>(announcementsApi[':id'].$put({ param: { id }, json: data }))
 }
 
 export function deleteAnnouncement(id: string) {
-  return unwrap<{ id: string; deleted: boolean }>(adminAnnouncementsApi[':id'].$delete({ param: { id } }))
+  return discard(announcementsApi[':id'].$delete({ param: { id } }))
 }
 
 // Shares API
 
 export type { ShareListItem, ShareView }
 
-export function listShares(page = 1, pageSize = 20, status?: 'active' | 'revoked') {
-  const query: Record<string, string> = { page: String(page), pageSize: String(pageSize) }
+export function listShares(pageToken?: string, pageSize = 20, status?: 'active' | 'revoked') {
+  const query: Record<string, string> = { pageSize: String(pageSize) }
+  if (pageToken) query.pageToken = pageToken
   if (status) query.status = status
-  return unwrap<{ items: ShareListItem[]; total: number; page: number; pageSize: number }>(
-    authedSharesApi.index.$get({ query }),
-  )
+  return unwrap<CursorPage<ShareListItem>>(authedSharesApi.index.$get({ query }))
+}
+
+export function listReceivedShares(pageToken?: string, pageSize = 20) {
+  const query: Record<string, string> = { pageSize: String(pageSize), box: 'received' }
+  if (pageToken) query.pageToken = pageToken
+  return unwrap<CursorPage<ShareListItem>>(authedSharesApi.index.$get({ query }))
 }
 
 export function getShare(token: string) {
   return unwrap<ShareView>(publicSharesApi[':token'].$get({ param: { token } }))
 }
 
-export function deleteShare(token: string) {
-  return authedSharesApi[':token'].$delete({ param: { token } }).then((res) => {
-    if (!res.ok) throw new ApiError(res.status, { error: res.statusText })
-  })
+export function revokeShare(token: string) {
+  return unwrap<ShareView>(authedSharesApi[':token'].status.$put({ param: { token }, json: { status: 'revoked' } }))
+}
+
+export function setSharePrivacy(token: string, isPrivate: boolean) {
+  return unwrap<{ private: boolean }>(
+    authedSharesApi[':token'].privacy.$put({ param: { token }, json: { private: isPrivate } }),
+  )
 }
 
 export interface CreateShareResult {
@@ -808,6 +1023,7 @@ export interface CreateShareResult {
   urls: { landing?: string; direct?: string }
   expiresAt: string | null
   downloadLimit: number | null
+  private: boolean
 }
 
 export function createShare(data: CreateShareRequest) {
@@ -818,29 +1034,20 @@ export function verifySharePassword(token: string, password: string) {
   return unwrap<{ ok: boolean }>(publicSharesApi[':token'].sessions.$post({ param: { token }, json: { password } }))
 }
 
-export interface ShareChildItem {
-  ref: string
-  name: string
-  type: string
-  size: number
-  isFolder: boolean
-}
+export type ShareChildItem = ShareObjectItem
+export type ShareChildrenResponse = ShareObjectsResponse
 
-export interface ShareChildrenResponse {
-  items: ShareChildItem[]
-  total: number
-  page: number
-  pageSize: number
-  breadcrumb: Array<{ name: string; path: string }>
-}
-
-export function listShareObjects(token: string, parent = '', page = 1, pageSize = 50) {
+export function listShareObjects(token: string, parent = '', pageToken?: string, pageSize = 50) {
   return unwrap<ShareChildrenResponse>(
     publicSharesApi[':token'].objects.$get({
       param: { token },
-      query: { parent, page: String(page), pageSize: String(pageSize) },
+      query: { parent, pageSize: String(pageSize), ...(pageToken ? { pageToken } : {}) },
     }),
   )
+}
+
+export function getShareReadme(token: string) {
+  return unwrap<ShareReadmeResponse>(publicSharesApi[':token'].readme.$get({ param: { token } }))
 }
 
 export function buildShareObjectUrl(token: string, ref: string): string {
@@ -866,7 +1073,7 @@ export function saveShareToDrive(token: string, data: SaveShareInput) {
 export type { IhostConfigResponse }
 
 export function getIhostConfig() {
-  return unwrap<IhostConfigResponse | null>(ihostConfigApi.index.$get())
+  return unwrap<IhostConfigResponse>(ihostConfigApi.index.$get())
 }
 
 export function enableIhostFeature() {
@@ -879,20 +1086,40 @@ export function updateIhostConfig(data: { customDomain?: string | null; refererA
 
 export function deleteIhostConfig() {
   return ihostConfigApi.index.$delete().then((res) => {
-    if (!res.ok) throw new ApiError(res.status, { error: res.statusText })
+    if (!res.ok) throw new ApiError(res.status, toErrorBody(res.status, { error: res.statusText }))
   })
+}
+
+export type { OAuthConsentContext, OAuthConsentResult, OAuthGrant, OAuthGrantList }
+
+export function getOAuthConsentContext(oauthQuery: string) {
+  return unwrap<OAuthConsentContext>(oauthGrantsApi['oauth-consent'].$get({ query: { oauthQuery } }))
+}
+
+export function submitOAuthConsent(input: OAuthConsentSubmit) {
+  return unwrap<OAuthConsentResult>(oauthGrantsApi['oauth-consent'].$post({ json: input }))
+}
+
+export function listOAuthGrants() {
+  return unwrap<OAuthGrantList>(oauthGrantsApi['oauth-grants'].$get())
+}
+
+export function revokeOAuthGrant(grantId: string) {
+  return discard(oauthGrantsApi['oauth-grants'][':grantId'].$delete({ param: { grantId } }))
 }
 
 // Image Host API Keys (via better-auth apiKey plugin)
 
 export interface IhostApiKey {
   id: string
+  configId: string
   name: string | null
   start: string | null
   prefix: string | null
   createdAt: string
   lastRequest: string | null
   permissions: Record<string, string[]> | null
+  metadata: ApiKeyMetadata | null
   referenceId: string
   enabled: boolean
 }
@@ -904,16 +1131,16 @@ export interface CreateIhostApiKeyResult extends IhostApiKey {
 async function apiKeyFetch<T>(path: string, options: RequestInit): Promise<T> {
   const res = await fetch(`/api/auth${path}`, { credentials: 'include', ...options })
   if (!res.ok) {
-    const parsed = (await res.json().catch(() => ({}))) as ApiErrorBody
-    throw new ApiError(res.status, { ...parsed, error: parsed.error ?? res.statusText })
+    const parsed = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, toErrorBody(res.status, parsed))
   }
   return res.json() as Promise<T>
 }
 
-export function listIhostApiKeys(organizationId: string) {
-  return apiKeyFetch<{ apiKeys: IhostApiKey[] }>(`/api-key/list?organizationId=${encodeURIComponent(organizationId)}`, {
+export function listApiKeys() {
+  return apiKeyFetch<{ apiKeys: IhostApiKey[] }>('/api-key/list', {
     method: 'GET',
-  }).then((res) => res.apiKeys.filter((k) => k.permissions?.ihost?.includes('upload')))
+  }).then((res) => res.apiKeys)
 }
 
 export function createIhostApiKey(organizationId: string, name: string) {
@@ -944,12 +1171,6 @@ export interface CreateWebDavAppPasswordResult extends WebDavAppPassword {
   key: string
 }
 
-export function listWebDavAppPasswords() {
-  return apiKeyFetch<{ apiKeys: WebDavAppPassword[] }>('/api-key/list?configId=webdav', {
-    method: 'GET',
-  }).then((res) => res.apiKeys.filter((k) => k.permissions?.webdav?.includes('read')))
-}
-
 export function createWebDavAppPassword(name: string) {
   return apiKeyFetch<CreateWebDavAppPasswordResult>('/api-key/create', {
     method: 'POST',
@@ -975,15 +1196,6 @@ export type RemoteDownloadApiKey = IhostApiKey
 
 export interface CreateRemoteDownloadApiKeyResult extends RemoteDownloadApiKey {
   key: string
-}
-
-export function listRemoteDownloadApiKeys(organizationId: string) {
-  return apiKeyFetch<{ apiKeys: RemoteDownloadApiKey[] }>(
-    `/api-key/list?organizationId=${encodeURIComponent(organizationId)}&configId=${ApiKeyTemplate.REMOTE_DOWNLOAD}`,
-    {
-      method: 'GET',
-    },
-  ).then((res) => res.apiKeys.filter((k) => k.permissions?.remoteDownload?.includes('create')))
 }
 
 export function createRemoteDownloadApiKey(organizationId: string, name: string) {
@@ -1022,7 +1234,11 @@ export interface PairingPollResult {
 }
 
 export function getLicensingStatus() {
-  return unwrap<BindingState>(licensingApi.status.$get())
+  return unwrap<BindingState>(licensingAdminApi.binding.$get())
+}
+
+export function getLicenseEntitlements() {
+  return unwrap<LicenseEntitlements>(licensingApi.entitlements.$get())
 }
 
 export function getInstanceInfo() {
@@ -1034,26 +1250,71 @@ export function getChangelog(opts?: { refresh?: boolean }) {
 }
 
 export function connectCloud() {
-  return unwrap<PairingInfo>(licensingAdminApi.pair.$post())
+  return unwrap<PairingInfo>(licensingAdminApi.pairings.$post())
 }
 
 export function pollPairing(code: string) {
-  return unwrap<PairingPollResult>(licensingAdminApi.pair[':code'].poll.$get({ param: { code } }))
+  return unwrap<PairingPollResult>(licensingAdminApi.pairings[':code'].$get({ param: { code } }))
 }
 
 export function refreshLicense() {
-  return unwrap<{ success: boolean; last_refresh_at: number | null }>(licensingAdminApi.refresh.$post())
+  return unwrap<{ success: boolean; last_refresh_at: number | null }>(licensingAdminApi['refresh-runs'].$post())
 }
 
 export function disconnectCloud() {
-  return unwrap<{ deleted: boolean }>(licensingAdminApi.binding.$delete())
+  return discard(licensingAdminApi.binding.$delete())
 }
 
-// Auth API — Better Auth passthrough, not typed via Hono RPC
-export async function getSession(): Promise<{ session: unknown; user: unknown } | null> {
-  const res = await fetch('/api/auth/get-session', { credentials: 'include' })
-  if (!res.ok) return null
-  return res.json()
+type SessionData = { session: unknown; user: unknown } | null
+
+const SESSION_CACHE_TTL_MS = 5000 // 5 seconds
+
+let sessionCache: { value: SessionData; at: number } | null = null
+let sessionInflight: Promise<SessionData> | null = null
+
+export function clearSessionCache() {
+  sessionCache = null
+  sessionInflight = null
+}
+
+async function fetchSession(): Promise<SessionData> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), SESSION_REQUEST_TIMEOUT_MS)
+
+  try {
+    const res = await fetch('/api/auth/get-session', { credentials: 'include', signal: controller.signal })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new ApiError(res.status, toErrorBody(res.status, body))
+    }
+    return res.json()
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('Session request timed out')
+    throw error
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+// Auth API — Better Auth passthrough, not typed via Hono RPC.
+// Concurrent callers share one in-flight request no matter how long it takes;
+// a resolved value is served for SESSION_CACHE_TTL_MS; failures are not cached.
+export function getSession(): Promise<SessionData> {
+  if (sessionCache && Date.now() - sessionCache.at < SESSION_CACHE_TTL_MS) {
+    return Promise.resolve(sessionCache.value)
+  }
+  if (sessionInflight) return sessionInflight
+
+  const request = fetchSession()
+    .then((value) => {
+      sessionCache = { value, at: Date.now() }
+      return value
+    })
+    .finally(() => {
+      if (sessionInflight === request) sessionInflight = null
+    })
+  sessionInflight = request
+  return request
 }
 
 export interface UploadProgress {
@@ -1113,13 +1374,68 @@ export function uploadToS3(url: string, file: File, options: UploadToS3Options =
   })
 }
 
+export interface UploadPartOptions {
+  onProgress?: (progress: UploadProgress) => void
+  signal?: AbortSignal
+  contentType?: string
+}
+
+/**
+ * PUTs a single multipart part (external presigned URL) and resolves with its
+ * ETag, which the multipart-complete call needs. The S3 bucket's CORS config
+ * must expose the ETag response header for this to be readable from the browser.
+ */
+export function uploadPartToS3(url: string, blob: Blob, options: UploadPartOptions = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    const abort = () => {
+      xhr.abort()
+      reject(new DOMException('Upload cancelled', 'AbortError'))
+    }
+
+    if (options.signal?.aborted) {
+      reject(new DOMException('Upload cancelled', 'AbortError'))
+      return
+    }
+
+    options.signal?.addEventListener('abort', abort, { once: true })
+    xhr.upload.onprogress = (event) => {
+      options.onProgress?.({ loaded: event.loaded, total: event.lengthComputable ? event.total : blob.size })
+    }
+    xhr.onload = () => {
+      options.signal?.removeEventListener('abort', abort)
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const etag = xhr.getResponseHeader('ETag')
+        if (!etag) {
+          reject(new Error('Missing ETag — the storage bucket must expose the ETag header via CORS'))
+          return
+        }
+        options.onProgress?.({ loaded: blob.size, total: blob.size })
+        resolve(etag.replace(/"/g, ''))
+        return
+      }
+      reject(new Error('Upload failed'))
+    }
+    xhr.onerror = () => {
+      options.signal?.removeEventListener('abort', abort)
+      reject(new Error('Upload failed'))
+    }
+    xhr.onabort = () => {
+      options.signal?.removeEventListener('abort', abort)
+    }
+    xhr.open('PUT', url)
+    if (options.contentType) xhr.setRequestHeader('Content-Type', options.contentType)
+    xhr.send(blob)
+  })
+}
+
 // Image Host Images API
 
 export type { ImageHosting }
 
 export interface IhostImageListResult {
   items: ImageHosting[]
-  nextCursor: string | null
+  nextPageToken: string | null
 }
 
 export interface IhostImageDraft {
@@ -1130,11 +1446,11 @@ export interface IhostImageDraft {
   storageKey: string
 }
 
-export function listIhostImages(opts?: { pathPrefix?: string; cursor?: string; limit?: number }) {
+export function listIhostImages(opts?: { pathPrefix?: string; pageToken?: string; pageSize?: number }) {
   const query: Record<string, string> = {}
   if (opts?.pathPrefix) query.pathPrefix = opts.pathPrefix
-  if (opts?.cursor) query.cursor = opts.cursor
-  if (opts?.limit != null) query.limit = String(opts.limit)
+  if (opts?.pageToken) query.pageToken = opts.pageToken
+  if (opts?.pageSize != null) query.pageSize = String(opts.pageSize)
   return unwrap<IhostImageListResult>(ihostApi.images.$get({ query }))
 }
 
@@ -1143,14 +1459,14 @@ export function createIhostImagePresign(data: { path: string; mime: AllowedImage
 }
 
 export function confirmIhostImage(id: string) {
-  return unwrap<ImageHosting>(ihostApi.images[':id'].$patch({ param: { id }, json: { action: 'confirm' as const } }))
+  return unwrap<ImageHosting>(ihostApi.images[':id'].status.$put({ param: { id } }))
 }
 
 export async function deleteIhostImage(id: string) {
   const res = await ihostApi.images[':id'].$delete({ param: { id } })
   if (!res.ok) {
-    const parsed = (await res.json().catch(() => ({}))) as ApiErrorBody
-    throw new ApiError(res.status, { ...parsed, error: parsed.error ?? res.statusText })
+    const parsed = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, toErrorBody(res.status, parsed))
   }
 }
 
@@ -1170,21 +1486,21 @@ async function putImageMultipart(url: string, file: File): Promise<{ url: string
     credentials: 'include',
   })
   if (!res.ok) {
-    const parsed = (await res.json().catch(() => ({}))) as ApiErrorBody
-    throw new ApiError(res.status, { ...parsed, error: parsed.error ?? res.statusText })
+    const parsed = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, toErrorBody(res.status, parsed))
   }
   return res.json() as Promise<{ url: string }>
 }
 
 export function uploadAvatar(file: File) {
-  return putImageMultipart('/api/me/avatar', file)
+  return putImageMultipart('/api/users/me/avatar', file)
 }
 
 export async function deleteAvatar() {
-  const res = await meApi.avatar.$delete()
+  const res = await users.me.avatar.$delete()
   if (!res.ok) {
-    const parsed = (await res.json().catch(() => ({}))) as ApiErrorBody
-    throw new ApiError(res.status, { ...parsed, error: parsed.error ?? res.statusText })
+    const parsed = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, toErrorBody(res.status, parsed))
   }
 }
 
@@ -1195,18 +1511,14 @@ export function uploadTeamLogo(teamId: string, file: File) {
 export async function deleteTeamLogo(teamId: string) {
   const res = await teamsApi[':teamId'].logo.$delete({ param: { teamId } })
   if (!res.ok) {
-    const parsed = (await res.json().catch(() => ({}))) as ApiErrorBody
-    throw new ApiError(res.status, { ...parsed, error: parsed.error ?? res.statusText })
+    const parsed = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, toErrorBody(res.status, parsed))
   }
 }
 
 // Branding API
 
 export type { BrandingConfig, BrandingField, BrandingThemeMode, BrandingThemePresetId, BrandingThemeValues }
-
-export function getBranding() {
-  return unwrap<BrandingConfig>(publicBrandingApi.index.$get())
-}
 
 // PUT uses multipart/form-data (logo/favicon are File objects).
 // Hono RPC does not express multipart cleanly — same documented exception as avatar/team logo uploads.
@@ -1236,14 +1548,14 @@ export async function saveBranding(data: {
     form.set('theme_ring_color', data.theme_custom.ring_color)
   }
 
-  const res = await fetch('/api/admin/branding', {
+  const res = await fetch('/api/site/settings/branding', {
     method: 'PUT',
     body: form,
     credentials: 'include',
   })
   if (!res.ok) {
-    const parsed = (await res.json().catch(() => ({}))) as ApiErrorBody
-    throw new ApiError(res.status, { ...parsed, error: parsed.error ?? res.statusText })
+    const parsed = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, toErrorBody(res.status, parsed))
   }
   return res.json() as Promise<BrandingConfig>
 }
@@ -1251,8 +1563,8 @@ export async function saveBranding(data: {
 export async function resetBrandingField(field: BrandingField): Promise<void> {
   const res = await brandingAdminApi[':field'].$delete({ param: { field } })
   if (!res.ok) {
-    const parsed = (await res.json().catch(() => ({}))) as ApiErrorBody
-    throw new ApiError(res.status, { ...parsed, error: parsed.error ?? res.statusText })
+    const parsed = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, toErrorBody(res.status, parsed))
   }
 }
 
@@ -1263,6 +1575,8 @@ export interface AdminAuditFilter {
   userId?: string
   action?: string
   targetType?: string
+  createdFrom?: string
+  createdTo?: string
 }
 
 export function listAdminAuditLogs(page = 1, pageSize = 20, filter: AdminAuditFilter = {}) {
@@ -1274,5 +1588,7 @@ export function listAdminAuditLogs(page = 1, pageSize = 20, filter: AdminAuditFi
   if (filter.userId) query.userId = filter.userId
   if (filter.action) query.action = filter.action
   if (filter.targetType) query.targetType = filter.targetType
+  if (filter.createdFrom) query.createdFrom = filter.createdFrom
+  if (filter.createdTo) query.createdTo = filter.createdTo
   return unwrap<PaginatedResponse<AdminAuditEvent>>(adminAuditApi.index.$get({ query }))
 }

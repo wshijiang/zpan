@@ -18,7 +18,7 @@
   <a href="https://github.com/saltbo/zpan/actions/workflows/release.yml"><img src="https://github.com/saltbo/zpan/actions/workflows/release.yml/badge.svg" alt="Release" /></a>
   <a href="https://github.com/saltbo/zpan/releases/latest"><img src="https://img.shields.io/github/v/release/saltbo/zpan" alt="GitHub Release" /></a>
   <a href="https://ghcr.io/saltbo/zpan"><img src="https://img.shields.io/badge/ghcr.io-saltbo%2Fzpan-blue" alt="Docker Image" /></a>
-  <a href="https://github.com/saltbo/zpan/blob/master/LICENSE"><img src="https://img.shields.io/github/license/saltbo/zpan.svg" alt="License" /></a>
+  <a href="https://github.com/saltbo/zpan/blob/main/LICENSE"><img src="https://img.shields.io/github/license/saltbo/zpan.svg" alt="License" /></a>
 </p>
 
 <p align="center">
@@ -46,7 +46,7 @@ The product boundary is intentional: ZPan is a purpose-built S3-backed web drive
 - **S3 web drive** — Manage files, folders, previews, trash, quotas, and team workspaces on top of your own object storage
 - **Image hosting** — Upload via PicGo, PicList, uPic, ShareX, Flameshot, or API and get a stable URL instantly
 - **File sharing** — Publish share links with password, expiration, download limits, direct links, and save-to-drive flows
-- **Personal homepage** — Give each user a public `/u/username` page for curated shared files and folder-style browsing
+- **Personal homepage** — Give each user a public `/u/username` page for public shared files and folder-style browsing
 - **External access** — Mount files through WebDAV and run downloader workers for remote-download workflows
 
 ## Why ZPan?
@@ -117,6 +117,10 @@ Deploy via GitHub Actions with zero server management. Free tier covers personal
 
 After initial setup, the workflow runs automatically every time you sync your fork with the latest release.
 
+This `CLOUDFLARE_API_TOKEN` is the **deployment token** used only by GitHub Actions/Wrangler to deploy ZPan and manage its D1/R2 resources. It is separate from the zone-scoped Cloudflare token entered later in **Admin Settings → Image custom domains**. The latter lets a running ZPan instance manage Cloudflare for SaaS hostnames and does not need D1 or R2 permissions. See [Image custom domains](docs/image-custom-domains.md).
+
+Dedicated WebDAV domain: enable WebDAV and configure its optional hostname in Admin Settings, then extend the API token with **Transform Rules:Edit**. When the hostname is left blank, a primary Worker Custom Domain such as `files.example.com` produces `dav.files.example.com`; the deployment workflow automatically attaches and verifies that derived hostname, manages the root-to-`/dav` rewrite, and records its readiness. Other deployments can verify their manually configured DNS/proxy from **Admin Settings → WebDAV**. Until verification succeeds, ZPan advertises the original `/dav/` endpoint. See [WebDAV custom domains](docs/webdav-custom-domain.md).
+
 ### AWS Lambda
 
 Deploy via GitHub Actions using SAM. Lambda Function URL provides HTTPS with no API Gateway needed.
@@ -134,14 +138,14 @@ See [docs/deploy/aws-lambda.md](docs/deploy/aws-lambda.md) for full setup instru
 **Quick start** — pull the pre-built image and bring your own S3 storage:
 
 ```bash
-curl -O https://raw.githubusercontent.com/saltbo/zpan/master/deploy/docker-compose.yml
+curl -O https://raw.githubusercontent.com/saltbo/zpan/main/deploy/docker-compose.yml
 docker compose up -d
 ```
 
 **With RustFS** (self-hosted S3-compatible storage, no external dependencies):
 
 ```bash
-curl -O https://raw.githubusercontent.com/saltbo/zpan/master/deploy/docker-compose.rustfs.yml
+curl -O https://raw.githubusercontent.com/saltbo/zpan/main/deploy/docker-compose.rustfs.yml
 docker compose -f docker-compose.rustfs.yml up -d
 ```
 

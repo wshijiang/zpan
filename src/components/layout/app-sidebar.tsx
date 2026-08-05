@@ -1,3 +1,4 @@
+import { DEFAULT_SITE_NAME } from '@shared/constants'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useRouterState } from '@tanstack/react-router'
 import {
@@ -28,8 +29,8 @@ import {
   SidebarMenuItem,
   SidebarSeparator,
 } from '@/components/ui/sidebar'
-import { useSiteOptions } from '@/hooks/use-site-options'
-import { getIhostConfig, listBackgroundJobs } from '@/lib/api'
+import { useSiteConfig } from '@/hooks/use-site-config'
+import { getActiveBackgroundJobCount, getIhostConfig } from '@/lib/api'
 import { useActiveOrganization, useSession } from '@/lib/auth-client'
 import { OrgSwitcher } from '../team/org-switcher'
 import { FolderTree } from './folder-tree'
@@ -40,7 +41,8 @@ export function AppSidebar() {
   const { t } = useTranslation()
   const { data: session } = useSession()
   const { data: activeOrg } = useActiveOrganization()
-  const { siteName } = useSiteOptions()
+  const { data: siteConfig } = useSiteConfig()
+  const siteName = siteConfig?.site.name ?? DEFAULT_SITE_NAME
   const { branding } = useBranding()
   const { data: ihostConfig } = useQuery({
     queryKey: ['ihost', 'config', activeOrg?.id],
@@ -49,15 +51,8 @@ export function AppSidebar() {
   })
   const { data: activeTaskCount = 0 } = useQuery({
     queryKey: ['background-jobs', 'active-count'],
-    queryFn: async () => {
-      const [queued, running] = await Promise.all([
-        listBackgroundJobs({ status: 'queued', page: 1, pageSize: 1 }),
-        listBackgroundJobs({ status: 'running', page: 1, pageSize: 1 }),
-      ])
-      return queued.total + running.total
-    },
+    queryFn: async () => (await getActiveBackgroundJobCount()).activeCount,
     enabled: !!session,
-    refetchInterval: 5000,
   })
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const fileType = useRouterState({ select: (s) => (s.location.search as { type?: string })?.type })
@@ -133,7 +128,7 @@ export function AppSidebar() {
               </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild isActive={activeShares}>
-                  <Link to="/shares" search={{ status: 'all', page: 1 }}>
+                  <Link to="/shares" search={{ status: 'all', box: 'sent' }}>
                     <Share2 className="h-4 w-4" />
                     <span>{t('nav.shares')}</span>
                   </Link>

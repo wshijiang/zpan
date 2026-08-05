@@ -41,13 +41,21 @@ async function signUpAndGoToImageHost(page: import('@playwright/test').Page) {
   await expect(page).toHaveURL(/files/, { timeout: 10000 })
 }
 
+async function openImageHostSettings(page: import('@playwright/test').Page) {
+  const response = await page.request.get('/api/auth/organization/list')
+  await expectApiOk(response, 'List workspaces')
+  const organizations = (await response.json()) as Array<{ id: string }>
+  expect(organizations.length).toBeGreaterThan(0)
+  await page.goto(`/teams/${organizations[0].id}/ihost`)
+  await expect(page).toHaveURL(/teams\/[^/]+\/ihost/, { timeout: 10000 })
+}
+
 async function enableImageHostFromSettings(page: import('@playwright/test').Page) {
-  await page.goto('/settings/ihost')
-  await expect(page).toHaveURL(/settings\/ihost/, { timeout: 10000 })
+  await openImageHostSettings(page)
   const enableBtn = page.getByRole('button', { name: /enable|activate/i })
   await expect(enableBtn).toBeVisible({ timeout: 10000 })
   const [response] = await Promise.all([
-    page.waitForResponse((r) => r.url().includes('/api/ihost/config'), { timeout: 10000 }),
+    page.waitForResponse((r) => r.url().includes('/api/image-hosting/config'), { timeout: 10000 }),
     enableBtn.click(),
   ])
   expect(response.ok()).toBe(true)
@@ -59,7 +67,7 @@ async function enableImageHostFromSettings(page: import('@playwright/test').Page
 test.describe('Image Host @all', () => {
   test('shows enable-feature prompt in settings before activation', async ({ page }) => {
     await signUpAndGoToImageHost(page)
-    await page.goto('/settings/ihost')
+    await openImageHostSettings(page)
     // Settings page shows an enable/activate button
     const enableBtn = page.getByRole('button', { name: /enable|activate/i })
     await expect(enableBtn).toBeVisible({ timeout: 10000 })
@@ -117,7 +125,7 @@ test.describe('Image Host gallery golden path @all', () => {
 
     // Wait for the presign + confirm API calls to complete
     const uploadResp = await page.waitForResponse(
-      (r) => r.url().includes('/api/ihost/images') && r.request().method() === 'POST',
+      (r) => r.url().includes('/api/image-hosting/images') && r.request().method() === 'POST',
       { timeout: 10000 },
     )
     await expectApiOk(uploadResp, 'Image upload')
@@ -145,7 +153,7 @@ test.describe('Image Host gallery golden path @all', () => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
 
     // Seed an image via API so we have something to interact with
-    const presignResp = await page.request.post('/api/ihost/images/presign', {
+    const presignResp = await page.request.post('/api/image-hosting/images/presign', {
       headers: { 'Content-Type': 'application/json' },
       data: { path: 'e2e-copy-test.png', mime: 'image/png', size: 100 },
     })
@@ -153,42 +161,44 @@ test.describe('Image Host gallery golden path @all', () => {
     const { id: draftId } = await presignResp.json()
 
     // Confirm the draft (simulate successful S3 upload)
-    const confirmResp = await page.request.patch(`/api/ihost/images/${draftId}`, {
-      headers: { 'Content-Type': 'application/json' },
-      data: { action: 'confirm' },
-    })
+    const confirmResp = await page.request.put(`/api/image-hosting/images/${draftId}/status`)
     await expectApiOk(confirmResp, 'Confirm seeded image')
+
+    await page.route('**/api/image-hosting/images?*', async (route) => {
+      if (route.request().method() !== 'GET') return route.continue()
+      const response = await route.fetch()
+      const body = (await response.json()) as { items: Array<{ path: string; url: string }> }
+      for (const item of body.items) {
+        if (item.path === 'e2e-copy-test.png') item.url = 'https://images.example.com/e2e-copy-test.png'
+      }
+      await route.fulfill({ response, json: body })
+    })
 
     // Reload to see the seeded image
     await page.reload()
-    await page.waitForLoadState('networkidle')
 
     await openImageRowActions(page, 'e2e-copy-test.png')
     await page.getByRole('menuitem', { name: /copy url/i }).hover()
     await page.getByRole('menuitem', { name: /markdown/i }).click()
 
     const clipText = await page.evaluate(() => navigator.clipboard.readText())
-    expect(clipText).toMatch(/!\[\]\(/)
+    expect(clipText).toBe('![](https://images.example.com/e2e-copy-test.png)')
   })
 
   test('delete with Undo → cancel → item restored', async ({ page }) => {
     await setupImageHost(page)
 
     // Seed an image
-    const presignResp = await page.request.post('/api/ihost/images/presign', {
+    const presignResp = await page.request.post('/api/image-hosting/images/presign', {
       headers: { 'Content-Type': 'application/json' },
       data: { path: 'e2e-delete-undo.png', mime: 'image/png', size: 100 },
     })
     await expectApiOk(presignResp, 'Seed image presign')
     const { id: draftId } = await presignResp.json()
-    const confirmResp = await page.request.patch(`/api/ihost/images/${draftId}`, {
-      headers: { 'Content-Type': 'application/json' },
-      data: { action: 'confirm' },
-    })
+    const confirmResp = await page.request.put(`/api/image-hosting/images/${draftId}/status`)
     await expectApiOk(confirmResp, 'Confirm seeded image')
 
     await page.reload()
-    await page.waitForLoadState('networkidle')
 
     await openImageRowActions(page, 'e2e-delete-undo.png')
     const deleteMenuItem = page.getByRole('menuitem', { name: /delete/i }).first()
@@ -210,20 +220,16 @@ test.describe('Image Host gallery golden path @all', () => {
     await setupImageHost(page)
 
     // Seed an image
-    const presignResp = await page.request.post('/api/ihost/images/presign', {
+    const presignResp = await page.request.post('/api/image-hosting/images/presign', {
       headers: { 'Content-Type': 'application/json' },
       data: { path: 'e2e-delete-perm.png', mime: 'image/png', size: 100 },
     })
     await expectApiOk(presignResp, 'Seed image presign')
     const { id: draftId } = await presignResp.json()
-    const confirmResp = await page.request.patch(`/api/ihost/images/${draftId}`, {
-      headers: { 'Content-Type': 'application/json' },
-      data: { action: 'confirm' },
-    })
+    const confirmResp = await page.request.put(`/api/image-hosting/images/${draftId}/status`)
     await expectApiOk(confirmResp, 'Confirm seeded image')
 
     await page.reload()
-    await page.waitForLoadState('networkidle')
 
     await openImageRowActions(page, 'e2e-delete-perm.png')
     const deleteMenuItem = page.getByRole('menuitem', { name: /delete/i }).first()
@@ -232,7 +238,7 @@ test.describe('Image Host gallery golden path @all', () => {
 
     // Undo toast appears — wait for the 5s timer, then the DELETE API call fires
     const [deleteResp] = await Promise.all([
-      page.waitForResponse((r) => r.url().includes('/api/ihost/images/') && r.request().method() === 'DELETE', {
+      page.waitForResponse((r) => r.url().includes('/api/image-hosting/images/') && r.request().method() === 'DELETE', {
         timeout: 10000,
       }),
       page.waitForTimeout(5500), // wait past the 5s undo window

@@ -1,5 +1,7 @@
 import { SignupMode } from '@shared/constants'
 import { describe, expect, it } from 'vitest'
+import { absoluteAuthCallbackURL } from '@/lib/auth-callback'
+import { isCredentialLoginMethod } from '@/lib/last-login-method'
 
 // SignIn is a React rendering component. The project has no jsdom or
 // @testing-library/react setup, so we cannot render it here.
@@ -84,14 +86,25 @@ describe('SignIn — sign-up link visibility', () => {
 })
 
 // ---------------------------------------------------------------------------
-// OAuth callback URL used for social sign-in
+// Default callback URL used when no continuation is present
 // ---------------------------------------------------------------------------
 
-const SIGN_IN_CALLBACK_URL = '/files'
+const PREVIEW_ORIGIN = 'https://feat-x402-paid-agent-uploads-zpan.saltbo.workers.dev'
+const DEFAULT_SIGN_IN_CALLBACK_URL = absoluteAuthCallbackURL('/files', PREVIEW_ORIGIN)
 
-describe('SignIn — OAuth and form callback URL', () => {
-  it('callback URL for sign-in is "/files"', () => {
-    expect(SIGN_IN_CALLBACK_URL).toBe('/files')
+describe('SignIn — default callback URL', () => {
+  it('uses the absolute current-origin files URL for an ordinary sign-in', () => {
+    expect(DEFAULT_SIGN_IN_CALLBACK_URL).toBe(`${PREVIEW_ORIGIN}/files`)
+  })
+})
+
+describe('SignIn — last login method', () => {
+  it.each(['email', 'username'])('treats %s as the credential form', (method) => {
+    expect(isCredentialLoginMethod(method)).toBe(true)
+  })
+
+  it.each(['github', 'google', null])('does not treat %s as the credential form', (method) => {
+    expect(isCredentialLoginMethod(method)).toBe(false)
   })
 })
 

@@ -1,15 +1,24 @@
 import type { AdminAuditEvent } from '@shared/types'
-import { useInfiniteQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AdminPageHeader } from '@/components/admin/admin-page-header'
+import {
+  AUDIT_DEFAULT_PAGE_SIZE,
+  AUDIT_FILTER_ALL,
+  AuditLogFilters,
+  AuditPagination,
+  type AuditTimeRange,
+  auditActionToFilter,
+  auditTimeRangeToFilter,
+} from '@/components/admin/audit-log-controls'
 import { ProBadge } from '@/components/ProBadge'
 import { UpgradeHint } from '@/components/UpgradeHint'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { useEntitlement } from '@/hooks/useEntitlement'
-import { listAdminAuditLogs } from '@/lib/api'
+import { type AdminAuditFilter, listAdminAuditLogs } from '@/lib/api'
 
 export const Route = createFileRoute('/_authenticated/admin/audit')({
   component: AuditLogsPage,
@@ -61,15 +70,17 @@ function metaDetail(event: AdminAuditEvent, t: (key: string, opts?: Record<strin
 function AuditRow({ event }: { event: AdminAuditEvent }) {
   const { t } = useTranslation()
   const createdAt = new Date(event.createdAt as unknown as string | number)
+  const actorLabel = formatActor(event)
+  const actorImage = event.actorType === 'user' ? event.user.image : null
   return (
     <div className="flex items-start gap-3 py-3">
       <Avatar className="h-8 w-8 flex-shrink-0">
-        {event.user.image && <AvatarImage src={event.user.image} alt={event.user.name} />}
-        <AvatarFallback className="text-xs">{userInitials(event.user.name || '?')}</AvatarFallback>
+        {actorImage && <AvatarImage src={actorImage} alt={actorLabel} />}
+        <AvatarFallback className="text-xs">{userInitials(actorLabel)}</AvatarFallback>
       </Avatar>
       <div className="min-w-0 flex-1">
         <p className="text-sm">
-          <span className="font-medium">{event.user.name || event.userId}</span>{' '}
+          <span className="font-medium">{actorLabel}</span>{' '}
           <span className="text-muted-foreground">{metaDetail(event, t)}</span>
         </p>
         <p className="text-xs text-muted-foreground">
@@ -81,25 +92,62 @@ function AuditRow({ event }: { event: AdminAuditEvent }) {
   )
 }
 
-const PAGE_SIZE = 20
+function formatActor(event: AdminAuditEvent): string {
+  if (event.actorType === 'oauth') {
+    const identity = event.actorRef ?? 'unknown'
+    return event.actorIssuer ? `Agent:${identity} · ${event.actorIssuer}` : `Agent:${identity}`
+  }
+  if (event.user.name) return event.user.name
+  if (event.userId) return event.userId
+  if (event.actorType === 'api_key') return event.actorRef ? `API key:${event.actorRef}` : 'API key'
+  if (event.actorType === 'agent') return event.actorRef ? `Agent:${event.actorRef}` : 'Agent'
+  if (event.actorType === 'anonymous') return 'Anonymous'
+  if (event.actorType === 'system') return event.actorRef ? `System:${event.actorRef}` : 'System'
+  if (event.actorType === 'downloader') return event.actorRef ? `Downloader:${event.actorRef}` : 'Downloader'
+  if (event.actorType === 'task-upload') return event.actorRef ? `Task upload:${event.actorRef}` : 'Task upload'
+  return 'Unknown'
+}
 
 function AuditLogsPage() {
   const { t } = useTranslation()
   const { hasFeature, isLoading: entitlementLoading } = useEntitlement()
   const auditEnabled = hasFeature('audit_log')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(AUDIT_DEFAULT_PAGE_SIZE)
+  const [action, setAction] = useState(AUDIT_FILTER_ALL)
+  const [timeRange, setTimeRange] = useState<AuditTimeRange>('all')
 
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isPending, error } = useInfiniteQuery({
-    queryKey: ['admin', 'audit'],
-    queryFn: ({ pageParam = 1 }) => listAdminAuditLogs(pageParam as number, PAGE_SIZE),
-    initialPageParam: 1,
-    getNextPageParam: (lastPage) => {
-      const loaded = (lastPage.page - 1) * lastPage.pageSize + lastPage.items.length
-      return loaded < lastPage.total ? lastPage.page + 1 : undefined
-    },
+  const filter = useMemo<AdminAuditFilter>(() => {
+    const auditAction = auditActionToFilter(action)
+    return {
+      ...(auditAction ? { action: auditAction } : {}),
+      ...auditTimeRangeToFilter(timeRange),
+    }
+  }, [action, timeRange])
+
+  const { data, isFetching, isPending, error } = useQuery({
+    queryKey: ['admin', 'audit', page, pageSize, action, timeRange],
+    queryFn: () => listAdminAuditLogs(page, pageSize, filter),
     enabled: auditEnabled,
   })
 
-  const allItems = data?.pages.flatMap((p) => p.items) ?? []
+  const items = data?.items ?? []
+  const total = data?.total ?? 0
+
+  function handleActionChange(value: string) {
+    setAction(value)
+    setPage(1)
+  }
+
+  function handleTimeRangeChange(value: AuditTimeRange) {
+    setTimeRange(value)
+    setPage(1)
+  }
+
+  function handlePageSizeChange(value: number) {
+    setPageSize(value)
+    setPage(1)
+  }
 
   return (
     <div className="space-y-4">
@@ -116,41 +164,55 @@ function AuditLogsPage() {
           description={t('admin.audit.upgradeDescription')}
           actionLabel={t('admin.audit.upgradeButton')}
         />
-      ) : isPending ? (
-        <div className="space-y-3">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <div key={i} className="flex items-start gap-3 py-3">
-              <div className="h-8 w-8 flex-shrink-0 animate-pulse rounded-full bg-muted" />
-              <div className="flex-1 space-y-1.5">
-                <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
-                <div className="h-3 w-1/4 animate-pulse rounded bg-muted" />
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : error ? (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-          {t('admin.audit.loadError')}
-        </div>
-      ) : allItems.length === 0 ? (
-        <div className="rounded-md border border-dashed p-8 text-center text-muted-foreground">
-          {t('admin.audit.empty')}
-        </div>
       ) : (
-        <>
-          <Card className="gap-0 divide-y px-4 py-0 shadow-none">
-            {allItems.map((event) => (
-              <AuditRow key={event.id} event={event} />
-            ))}
-          </Card>
-          {hasNextPage && (
-            <div className="pt-2 text-center">
-              <Button variant="outline" size="sm" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
-                {isFetchingNextPage ? '...' : t('admin.audit.loadMore')}
-              </Button>
+        <div className="space-y-4">
+          <AuditLogFilters
+            action={action}
+            timeRange={timeRange}
+            disabled={isFetching}
+            onActionChange={handleActionChange}
+            onTimeRangeChange={handleTimeRangeChange}
+          />
+
+          {isPending ? (
+            <div className="space-y-3" role="status">
+              {[1, 2, 3, 4, 5].map((i) => (
+                <div key={i} className="flex items-start gap-3 py-3">
+                  <div className="h-8 w-8 flex-shrink-0 animate-pulse rounded-full bg-muted" />
+                  <div className="flex-1 space-y-1.5">
+                    <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+                    <div className="h-3 w-1/4 animate-pulse rounded bg-muted" />
+                  </div>
+                </div>
+              ))}
             </div>
+          ) : error ? (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              {t('admin.audit.loadError')}
+            </div>
+          ) : items.length === 0 ? (
+            <div className="rounded-md border border-dashed p-8 text-center text-muted-foreground">
+              {t('admin.audit.empty')}
+            </div>
+          ) : (
+            <Card className="gap-0 divide-y px-4 py-0 shadow-none">
+              {items.map((event) => (
+                <AuditRow key={event.id} event={event} />
+              ))}
+            </Card>
           )}
-        </>
+
+          {!isPending && !error && (
+            <AuditPagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              disabled={isFetching}
+              onPageChange={setPage}
+              onPageSizeChange={handlePageSizeChange}
+            />
+          )}
+        </div>
       )}
     </div>
   )

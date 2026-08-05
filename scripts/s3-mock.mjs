@@ -16,8 +16,9 @@ const server = createServer(async (req, res) => {
   try {
     await handleRequest(req, res)
   } catch (error) {
+    console.error('[s3-mock] request failed:', error)
     res.writeHead(500, { 'Content-Type': 'text/plain' })
-    res.end(error instanceof Error ? error.message : String(error))
+    res.end('Internal Server Error')
   }
 })
 
@@ -98,7 +99,10 @@ async function handleRequest(req, res) {
       res.end('Not found')
       return
     }
-    writeObject(res, object, req.headers.range)
+    writeObject(res, object, req.headers.range, {
+      contentDisposition: url.searchParams.get('response-content-disposition'),
+      contentType: url.searchParams.get('response-content-type'),
+    })
     return
   }
 
@@ -159,12 +163,16 @@ function completeMultipartUpload(res, url, bucket, key) {
   res.end('<CompleteMultipartUploadResult />')
 }
 
-function writeObject(res, object, rangeHeader) {
+function writeObject(res, object, rangeHeader, overrides) {
+  const headers = {
+    'Content-Type': overrides.contentType ?? object.contentType,
+    ...(overrides.contentDisposition ? { 'Content-Disposition': overrides.contentDisposition } : {}),
+  }
   if (!rangeHeader) {
     res.writeHead(200, {
       'Content-Length': object.body.byteLength,
-      'Content-Type': object.contentType,
       etag: etag(object.body),
+      ...headers,
     })
     res.end(object.body)
     return
@@ -183,8 +191,8 @@ function writeObject(res, object, rangeHeader) {
   res.writeHead(206, {
     'Content-Length': slice.byteLength,
     'Content-Range': `bytes ${start}-${end}/${object.body.byteLength}`,
-    'Content-Type': object.contentType,
     etag: etag(object.body),
+    ...headers,
   })
   res.end(slice)
 }
@@ -205,7 +213,7 @@ function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,POST,DELETE,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', '*')
-  res.setHeader('Access-Control-Expose-Headers', 'ETag,Content-Length,Content-Range,Content-Type')
+  res.setHeader('Access-Control-Expose-Headers', 'ETag,Content-Disposition,Content-Length,Content-Range,Content-Type')
 }
 
 function etag(body) {

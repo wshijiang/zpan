@@ -1,21 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { Search, ShieldCheck, Trash2, UserX } from 'lucide-react'
+import { Search, ShieldCheck, UserX } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { DeleteUserDialog } from '@/components/admin/delete-user-dialog'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { listUsers, type UserWithOrg, updateUserStatus } from '@/lib/api'
-import { formatSize } from '@/lib/format'
+import { getUserQuotaById } from '@/lib/api'
+import { type AdminUser, adminListUsers, adminSetUserBanned } from '@/lib/auth-client'
+import { formatDate, formatSize, getInitials } from '@/lib/format'
 
 export const Route = createFileRoute('/_authenticated/users/')({
   component: UsersPage,
 })
 
-type UserRow = UserWithOrg
+type UserRow = AdminUser & { quotaUsed: number; quotaTotal: number }
 
 function UsersPage() {
   const { t } = useTranslation()
@@ -25,16 +25,24 @@ function UsersPage() {
   const [page, setPage] = useState(1)
   const pageSize = 20
 
-  const [deleteDialogUser, setDeleteDialogUser] = useState<{ id: string; name: string } | null>(null)
-
   const usersQuery = useQuery({
     queryKey: ['admin', 'users', page, pageSize],
-    queryFn: () => listUsers(page, pageSize),
+    queryFn: () => adminListUsers({ limit: pageSize, offset: (page - 1) * pageSize }),
+  })
+
+  const baseUsers = useMemo(() => usersQuery.data?.users ?? [], [usersQuery.data])
+
+  const quotaQuery = useQuery({
+    queryKey: ['admin', 'user-quotas', baseUsers.map((u) => u.id)],
+    queryFn: async () => {
+      const entries = await Promise.all(baseUsers.map(async (u) => [u.id, await getUserQuotaById(u.id)] as const))
+      return new Map(entries)
+    },
+    enabled: baseUsers.length > 0,
   })
 
   const toggleStatusMutation = useMutation({
-    mutationFn: ({ userId, status }: { userId: string; status: 'active' | 'disabled' }) =>
-      updateUserStatus(userId, status),
+    mutationFn: ({ userId, banned }: { userId: string; banned: boolean }) => adminSetUserBanned(userId, banned),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
       toast.success(t('admin.users.statusUpdated'))
@@ -45,8 +53,13 @@ function UsersPage() {
   })
 
   const users: UserRow[] = useMemo(() => {
-    return usersQuery.data?.items ?? []
-  }, [usersQuery.data])
+    const quota = quotaQuery.data
+    return baseUsers.map((user) => ({
+      ...user,
+      quotaUsed: quota?.get(user.id)?.used ?? 0,
+      quotaTotal: quota?.get(user.id)?.total ?? 0,
+    }))
+  }, [baseUsers, quotaQuery.data])
 
   const filtered = useMemo(() => {
     if (!search.trim()) return users
@@ -106,13 +119,7 @@ function UsersPage() {
                 user={user}
                 isToggling={toggleStatusMutation.isPending}
                 onOpenUser={() => navigate({ to: '/admin/users/$userId', params: { userId: user.id } })}
-                onToggleStatus={() =>
-                  toggleStatusMutation.mutate({
-                    userId: user.id,
-                    status: user.banned ? 'active' : 'disabled',
-                  })
-                }
-                onDelete={() => setDeleteDialogUser({ id: user.id, name: user.name })}
+                onToggleStatus={() => toggleStatusMutation.mutate({ userId: user.id, banned: !user.banned })}
               />
             ))}
             {filtered.length === 0 && (
@@ -139,12 +146,6 @@ function UsersPage() {
           </Button>
         </div>
       )}
-
-      <DeleteUserDialog
-        open={deleteDialogUser !== null}
-        onOpenChange={(open) => !open && setDeleteDialogUser(null)}
-        user={deleteDialogUser}
-      />
     </div>
   )
 }
@@ -154,13 +155,11 @@ function UserTableRow({
   isToggling,
   onOpenUser,
   onToggleStatus,
-  onDelete,
 }: {
   user: UserRow
   isToggling: boolean
   onOpenUser: () => void
   onToggleStatus: () => void
-  onDelete: () => void
 }) {
   const { t } = useTranslation()
 
@@ -215,9 +214,6 @@ function UserTableRow({
           >
             {user.banned ? <ShieldCheck /> : <UserX />}
           </Button>
-          <Button variant="ghost" size="icon-xs" onClick={onDelete} title={t('common.delete')}>
-            <Trash2 className="text-destructive" />
-          </Button>
         </div>
       </td>
     </tr>
@@ -227,18 +223,4 @@ function UserTableRow({
 function formatQuota(used: number, total: number): string {
   if (total <= 0) return `${formatSize(used)} / --`
   return `${formatSize(used)} / ${formatSize(total)}`
-}
-
-function formatDate(timestamp: number): string {
-  const d = new Date(timestamp)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString()
-}
-
-function getInitials(name: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0].toUpperCase())
-    .join('')
 }

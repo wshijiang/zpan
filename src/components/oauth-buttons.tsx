@@ -1,30 +1,39 @@
-import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { OAuthProviderIcon } from '@/components/oauth-provider-icon'
 import { Button } from '@/components/ui/button'
-import { listAuthProviders } from '@/lib/api'
+import { useSiteConfig } from '@/hooks/use-site-config'
+import { absoluteAuthCallbackURL } from '@/lib/auth-callback'
 import { authClient } from '@/lib/auth-client'
 
 export function useOAuthProviders() {
-  const { data, isLoading } = useQuery({
-    queryKey: ['auth-providers'],
-    queryFn: listAuthProviders,
-    staleTime: 5 * 60 * 1000,
-  })
-  return { providers: data?.items ?? [], isLoading }
+  const { data, isLoading } = useSiteConfig()
+  return { providers: data?.auth.providers ?? [], isLoading }
 }
 
-export function OAuthButtons() {
+export function OAuthButtons({
+  showLastUsed = false,
+  callbackURL = '/files',
+  onSignIn,
+}: {
+  showLastUsed?: boolean
+  callbackURL?: string
+  onSignIn?: () => void
+}) {
   const { t } = useTranslation()
   const [error, setError] = useState('')
   const { providers, isLoading } = useOAuthProviders()
+  const lastLoginMethod = showLastUsed ? authClient.getLastUsedLoginMethod() : null
 
   if (isLoading || providers.length === 0) return null
 
   async function handleOAuth(providerId: string) {
     setError('')
-    const result = await authClient.signIn.social({ provider: providerId, callbackURL: '/files' })
+    onSignIn?.()
+    const result = await authClient.signIn.social({
+      provider: providerId,
+      callbackURL: absoluteAuthCallbackURL(callbackURL, window.location.origin),
+    })
     if (result.error) {
       setError(result.error.message ?? t('auth.signInFailed'))
     }
@@ -35,14 +44,17 @@ export function OAuthButtons() {
       {error && <p className="text-sm text-destructive">{error}</p>}
       {providers.map((provider) => (
         <Button
-          key={provider.providerId}
+          key={provider.id}
           type="button"
           variant="outline"
-          className="w-full"
-          onClick={() => handleOAuth(provider.providerId)}
+          className="relative w-full"
+          onClick={() => handleOAuth(provider.id)}
         >
           <OAuthProviderIcon icon={provider.icon} name={provider.name} />
           {t('auth.continueWith', { provider: provider.name })}
+          {lastLoginMethod === provider.id && (
+            <span className="absolute right-3 text-xs font-normal text-muted-foreground">{t('auth.lastUsed')}</span>
+          )}
         </Button>
       ))}
     </div>

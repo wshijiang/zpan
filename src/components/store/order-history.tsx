@@ -14,26 +14,24 @@ import {
 } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { cloudOrderItemStorageBytes, cloudOrderItemTrafficBytes } from '@/lib/cloud-order'
-import { formatSize } from '@/lib/format'
+import { formatCurrency, formatSize } from '@/lib/format'
 
 export function StorageOrderHistoryDialog({
   orders,
   onContinuePayment,
   onCancelOrder,
-  continuingOrderId,
   cancelingOrderId,
 }: {
   orders: CloudOrder[]
   onContinuePayment: (orderId: string) => void
   onCancelOrder: (orderId: string) => void
-  continuingOrderId: string | null
   cancelingOrderId: string | null
 }) {
   const { t } = useTranslation()
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
+        <Button variant="outline">
           <ShoppingCart />
           {t('storage.historyTitle')}
         </Button>
@@ -48,7 +46,6 @@ export function StorageOrderHistoryDialog({
             orders={orders}
             onContinuePayment={onContinuePayment}
             onCancelOrder={onCancelOrder}
-            continuingOrderId={continuingOrderId}
             cancelingOrderId={cancelingOrderId}
           />
         </div>
@@ -124,19 +121,18 @@ function OrderRow({
           )}
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <span>{formatTargetValue(order, 'orgId')}</span>
           <span>{new Date(order.createdAt).toLocaleString()}</span>
         </div>
       </div>
       <div className="flex items-center gap-3 self-center">
         <div className="text-right">
           <div className="text-sm font-medium tabular-nums">
-            {formatMoney(order.totalAmount, order.currency, i18n.resolvedLanguage ?? 'en')}
+            {formatCurrency(order.totalAmount, order.currency, i18n.resolvedLanguage ?? 'en')}
           </div>
           {order.discountAmount > 0 && (
             <div className="text-xs text-muted-foreground">
               {t('storage.creditDiscount', {
-                amount: formatMoney(order.discountAmount, order.currency, i18n.resolvedLanguage ?? 'en'),
+                amount: formatCurrency(order.discountAmount, order.currency, i18n.resolvedLanguage ?? 'en'),
               })}
             </div>
           )}
@@ -204,16 +200,7 @@ function OrderIconButton({
   )
 }
 
-function formatMoney(amount: number, currency: string, language: string) {
-  return new Intl.NumberFormat(language, { style: 'currency', currency: currency.toUpperCase() }).format(amount / 100)
-}
-
 function isActionableOrder(order: CloudOrder) {
   if (order.status !== 'pending') return false
   return order.paymentStatus !== 'paid' && order.paymentStatus !== 'canceled'
-}
-
-function formatTargetValue(order: CloudOrder, key: string) {
-  const value = order.target?.[key]
-  return typeof value === 'string' ? value : '-'
 }

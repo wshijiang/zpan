@@ -309,6 +309,342 @@
       "when": 1780721031283,
       "tag": "0044_add-download-task-attempt",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1781825420340,
+      "tag": "0045_soft_outlaw_kid",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1781825432738,
+      "tag": "0046_magenta_layla_miller",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1781825438681,
+      "tag": "0047_trash-via-trashedat",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1781925137737,
+      "tag": "0048_drop-storages-mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1782201600733,
+      "tag": "0049_add-force-path-style",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "6",
+      "when": 1782320738724,
+      "tag": "0050_drop-storage-title",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "6",
+      "when": 1782331014772,
+      "tag": "0051_nostalgic_cerebro",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "6",
+      "when": 1782761700959,
+      "tag": "0052_rename-downloader-http-engine",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "6",
+      "when": 1782781065387,
+      "tag": "0053_striped_pride",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "6",
+      "when": 1783647878596,
+      "tag": "0054_lively_nuke",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "6",
+      "when": 1783697537563,
+      "tag": "0055_hourly-admin-stats",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "6",
+      "when": 1784524502907,
+      "tag": "0056_stats-correctness-round-1",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "6",
+      "when": 1784526402754,
+      "tag": "0057_stats-quota-uniqueness",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1784572374065,
+      "tag": "0058_drop-system-options-public",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1784606180765,
+      "tag": "0059_storage-usage-ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "6",
+      "when": 1784614533084,
+      "tag": "0060_traffic-issued-at",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1784661577715,
+      "tag": "0061_rename-audit-events",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "6",
+      "when": 1784675805400,
+      "tag": "0062_remove-audit-event-category",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "6",
+      "when": 1784682279012,
+      "tag": "0063_user-last-active-at",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "6",
+      "when": 1784684944405,
+      "tag": "0064_download-task-events-soft-delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "6",
+      "when": 1784827364022,
+      "tag": "0065_storage-usage-breakdowns",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "6",
+      "when": 1784839030057,
+      "tag": "0066_add-storage-enabled-health-fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "6",
+      "when": 1784839039887,
+      "tag": "0067_storage-health-status-default",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "6",
+      "when": 1784842514010,
+      "tag": "0068_add-storage-status-reason",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "6",
+      "when": 1784842525068,
+      "tag": "0069_storage-health-status-vocabulary",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "6",
+      "when": 1784850571453,
+      "tag": "0070_profile-share-listing",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "6",
+      "when": 1784869319265,
+      "tag": "0071_share-privacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "6",
+      "when": 1785081860795,
+      "tag": "0072_optimize-webdav-paths",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "6",
+      "when": 1785120950373,
+      "tag": "0073_resource_changes",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "6",
+      "when": 1785121667983,
+      "tag": "0074_download_task_cursor_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "6",
+      "when": 1785122035700,
+      "tag": "0075_matter_cursor_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "6",
+      "when": 1785122069744,
+      "tag": "0076_image_hosting_cursor_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "6",
+      "when": 1785122566039,
+      "tag": "0077_event_resource_cursor_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "6",
+      "when": 1785123933087,
+      "tag": "0078_share_trash_cursor_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "6",
+      "when": 1785201664275,
+      "tag": "0079_image-domain-providers",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "6",
+      "when": 1785289409896,
+      "tag": "0080_downloader-bootstrap-credentials",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "6",
+      "when": 1785337905649,
+      "tag": "0081_spotty_boomerang",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "6",
+      "when": 1785351402721,
+      "tag": "0082_agent_oauth_consent_last_used_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "6",
+      "when": 1785388050472,
+      "tag": "0083_external-resource-oauth",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "6",
+      "when": 1785388374965,
+      "tag": "0084_better-auth-account-issuer",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "6",
+      "when": 1785388778835,
+      "tag": "0085_oauth-jwt-revocation",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "6",
+      "when": 1785456041947,
+      "tag": "0086_agent-audit-identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "6",
+      "when": 1785462114956,
+      "tag": "0087_x402_capacity_purchases",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "6",
+      "when": 1785471548091,
+      "tag": "0088_x402_tenant_idempotency",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "6",
+      "when": 1785506906336,
+      "tag": "0089_better-auth-account-issuer-backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "6",
+      "when": 1785649535282,
+      "tag": "0090_oauth-rar-par",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "6",
+      "when": 1785721689950,
+      "tag": "0091_oauth-client-registration-management",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "6",
+      "when": 1785867717485,
+      "tag": "0092_audit-event-key",
+      "breakpoints": true
     }
   ]
 }

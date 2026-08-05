@@ -5,9 +5,11 @@ import { ZPAN_CLOUD_URL_DEFAULT } from '../../shared/constants'
 import type { LicenseEdition } from '../../shared/types'
 import { createApp } from '../app'
 import { createAuth } from '../auth'
+import { createDeps } from '../composition'
 import * as authSchema from '../db/auth-schema'
 import * as schema from '../db/schema'
 import type { Platform } from '../platform/interface'
+import { resetSitePublicOriginCache } from '../usecases/site/public-origin'
 
 const AUTH_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS user (
@@ -22,9 +24,11 @@ const AUTH_SCHEMA_SQL = `
     ban_expires INTEGER,
     username TEXT UNIQUE,
     display_username TEXT,
+    last_active_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
     updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
   );
+  CREATE INDEX IF NOT EXISTS user_lastActiveAt_idx ON user(last_active_at);
   CREATE TABLE IF NOT EXISTS session (
     id TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL,
@@ -40,6 +44,7 @@ const AUTH_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS session_userId_idx ON session(user_id);
   CREATE TABLE IF NOT EXISTS account (
     id TEXT PRIMARY KEY,
+    issuer TEXT NOT NULL DEFAULT '',
     account_id TEXT NOT NULL,
     provider_id TEXT NOT NULL,
     user_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
@@ -54,6 +59,7 @@ const AUTH_SCHEMA_SQL = `
     updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
   );
   CREATE INDEX IF NOT EXISTS account_userId_idx ON account(user_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS account_issuer_providerAccountId_unique ON account(issuer, account_id);
   CREATE TABLE IF NOT EXISTS verification (
     id TEXT PRIMARY KEY,
     identifier TEXT NOT NULL,
@@ -110,6 +116,186 @@ const AUTH_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS deviceCode_device_code_idx ON deviceCode(device_code);
   CREATE INDEX IF NOT EXISTS deviceCode_user_code_idx ON deviceCode(user_code);
   CREATE INDEX IF NOT EXISTS deviceCode_status_idx ON deviceCode(status);
+  CREATE TABLE IF NOT EXISTS jwks (
+    id TEXT PRIMARY KEY,
+    public_key TEXT NOT NULL,
+    private_key TEXT NOT NULL,
+    alg TEXT,
+    crv TEXT,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    expires_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS oauthClient (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL UNIQUE,
+    client_secret TEXT,
+    disabled INTEGER DEFAULT 0,
+    skip_consent INTEGER,
+    enable_end_session INTEGER,
+    subject_type TEXT,
+    scopes TEXT,
+    user_id TEXT REFERENCES user(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    name TEXT,
+    uri TEXT,
+    icon TEXT,
+    contacts TEXT,
+    tos TEXT,
+    policy TEXT,
+    software_id TEXT,
+    software_version TEXT,
+    software_statement TEXT,
+    redirect_uris TEXT NOT NULL,
+    post_logout_redirect_uris TEXT,
+    backchannel_logout_uri TEXT,
+    backchannel_logout_session_required INTEGER,
+    token_endpoint_auth_method TEXT,
+    jwks TEXT,
+    jwks_uri TEXT,
+    grant_types TEXT,
+    response_types TEXT,
+    public INTEGER,
+    type TEXT,
+    require_pkce INTEGER,
+    dpop_bound_access_tokens INTEGER DEFAULT 0,
+    reference_id TEXT,
+    metadata TEXT
+  );
+  CREATE INDEX IF NOT EXISTS oauthClient_client_id_idx ON oauthClient(client_id);
+  CREATE INDEX IF NOT EXISTS oauthClient_user_id_idx ON oauthClient(user_id);
+  CREATE TABLE IF NOT EXISTS oauthClientRegistration (
+    client_id TEXT PRIMARY KEY REFERENCES oauthClient(client_id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  );
+  CREATE INDEX IF NOT EXISTS oauthClientRegistration_token_hash_idx ON oauthClientRegistration(token_hash);
+  CREATE TABLE IF NOT EXISTS oauthResource (
+    id TEXT PRIMARY KEY,
+    identifier TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    access_token_ttl INTEGER,
+    refresh_token_ttl INTEGER,
+    signing_algorithm TEXT,
+    signing_key_id TEXT,
+    allowed_scopes TEXT,
+    custom_claims TEXT,
+    dpop_bound_access_tokens_required INTEGER DEFAULT 0,
+    disabled INTEGER DEFAULT 0,
+    policy_version INTEGER DEFAULT 1,
+    metadata TEXT,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  );
+  CREATE INDEX IF NOT EXISTS oauthResource_identifier_idx ON oauthResource(identifier);
+  CREATE TABLE IF NOT EXISTS oauthClientResource (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL REFERENCES oauthClient(client_id) ON DELETE CASCADE,
+    resource_id TEXT NOT NULL REFERENCES oauthResource(identifier) ON DELETE CASCADE,
+    metadata TEXT,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  );
+  CREATE INDEX IF NOT EXISTS oauthClientResource_client_id_idx ON oauthClientResource(client_id);
+  CREATE INDEX IF NOT EXISTS oauthClientResource_resource_id_idx ON oauthClientResource(resource_id);
+  CREATE TABLE IF NOT EXISTS oauthRefreshToken (
+    id TEXT PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    client_id TEXT NOT NULL REFERENCES oauthClient(client_id) ON DELETE CASCADE,
+    session_id TEXT REFERENCES session(id) ON DELETE SET NULL,
+    user_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+    reference_id TEXT,
+    authorization_code_id TEXT,
+    resources TEXT,
+    requested_user_info_claims TEXT,
+    authorization_details TEXT,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    revoked INTEGER,
+    rotated_at INTEGER,
+    rotation_replay_response TEXT,
+    rotation_replay_expires_at INTEGER,
+    auth_time INTEGER,
+    confirmation TEXT,
+    scopes TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS oauthRefreshToken_client_id_idx ON oauthRefreshToken(client_id);
+  CREATE INDEX IF NOT EXISTS oauthRefreshToken_session_id_idx ON oauthRefreshToken(session_id);
+  CREATE INDEX IF NOT EXISTS oauthRefreshToken_user_id_idx ON oauthRefreshToken(user_id);
+  CREATE INDEX IF NOT EXISTS oauthRefreshToken_token_idx ON oauthRefreshToken(token);
+  CREATE TABLE IF NOT EXISTS oauthAccessToken (
+    id TEXT PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    client_id TEXT NOT NULL REFERENCES oauthClient(client_id) ON DELETE CASCADE,
+    session_id TEXT REFERENCES session(id) ON DELETE SET NULL,
+    user_id TEXT REFERENCES user(id) ON DELETE CASCADE,
+    reference_id TEXT,
+    authorization_code_id TEXT,
+    resources TEXT,
+    requested_user_info_claims TEXT,
+    authorization_details TEXT,
+    refresh_id TEXT REFERENCES oauthRefreshToken(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    revoked INTEGER,
+    confirmation TEXT,
+    scopes TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS oauthAccessToken_client_id_idx ON oauthAccessToken(client_id);
+  CREATE INDEX IF NOT EXISTS oauthAccessToken_session_id_idx ON oauthAccessToken(session_id);
+  CREATE INDEX IF NOT EXISTS oauthAccessToken_user_id_idx ON oauthAccessToken(user_id);
+  CREATE INDEX IF NOT EXISTS oauthAccessToken_refresh_id_idx ON oauthAccessToken(refresh_id);
+  CREATE INDEX IF NOT EXISTS oauthAccessToken_token_idx ON oauthAccessToken(token);
+  CREATE TABLE IF NOT EXISTS oauthConsent (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL REFERENCES oauthClient(client_id) ON DELETE CASCADE,
+    user_id TEXT REFERENCES user(id) ON DELETE CASCADE,
+    reference_id TEXT,
+    resources TEXT,
+    requested_user_info_claims TEXT,
+    authorization_details TEXT,
+    scopes TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer)),
+    last_used_at INTEGER,
+    updated_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  );
+  CREATE INDEX IF NOT EXISTS oauthConsent_client_id_idx ON oauthConsent(client_id);
+  CREATE INDEX IF NOT EXISTS oauthConsent_user_id_idx ON oauthConsent(user_id);
+  CREATE TABLE IF NOT EXISTS oauthClientAssertion (
+    id TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS oauthPushedAuthorizationRequest (
+    id TEXT PRIMARY KEY,
+    request_uri TEXT NOT NULL UNIQUE,
+    client_id TEXT NOT NULL REFERENCES oauthClient(client_id) ON DELETE CASCADE,
+    parameters TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  );
+  CREATE INDEX IF NOT EXISTS oauthPushedAuthorizationRequest_client_id_idx ON oauthPushedAuthorizationRequest(client_id);
+  CREATE INDEX IF NOT EXISTS oauthPushedAuthorizationRequest_expires_at_idx ON oauthPushedAuthorizationRequest(expires_at);
+  CREATE TABLE IF NOT EXISTS oauthJwtRevocation (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  );
+  CREATE INDEX IF NOT EXISTS oauthJwtRevocation_expires_at_idx ON oauthJwtRevocation(expires_at);
+  CREATE TABLE IF NOT EXISTS downloader_bootstrap_credentials (
+    id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    user_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+    device_code TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    consumed_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (cast(unixepoch('subsecond') * 1000 as integer))
+  );
+  CREATE INDEX IF NOT EXISTS downloader_bootstrap_token_hash_idx ON downloader_bootstrap_credentials(token_hash);
+  CREATE INDEX IF NOT EXISTS downloader_bootstrap_user_idx ON downloader_bootstrap_credentials(user_id);
+  CREATE INDEX IF NOT EXISTS downloader_bootstrap_consumed_idx ON downloader_bootstrap_credentials(consumed_at);
 `
 
 const APP_SCHEMA_SQL = `
@@ -126,9 +312,15 @@ const APP_SCHEMA_SQL = `
     storage_id TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'draft',
     trashed_at INTEGER,
+    purged_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
+  CREATE UNIQUE INDEX IF NOT EXISTS matters_active_name_uniq
+    ON matters(org_id, parent, LOWER(name))
+    WHERE status = 'active' AND trashed_at IS NULL;
+  CREATE INDEX IF NOT EXISTS matters_list_page_idx
+    ON matters(org_id, parent, status, trashed_at, purged_at, dirtype DESC, created_at, id);
   CREATE TABLE IF NOT EXISTS webdav_dead_properties (
     id TEXT PRIMARY KEY,
     org_id TEXT NOT NULL,
@@ -157,8 +349,7 @@ const APP_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS webdav_locks_expires_idx ON webdav_locks(expires_at);
   CREATE TABLE IF NOT EXISTS storages (
     id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    mode TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '',
     bucket TEXT NOT NULL,
     endpoint TEXT NOT NULL,
     region TEXT NOT NULL DEFAULT 'auto',
@@ -168,10 +359,14 @@ const APP_SCHEMA_SQL = `
     custom_host TEXT DEFAULT '',
     capacity INTEGER NOT NULL DEFAULT 0,
     used INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'active',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'unknown',
+    status_reason TEXT,
+    status_checked_at INTEGER,
     egress_credit_billing_enabled INTEGER NOT NULL DEFAULT 0,
     egress_credit_unit_bytes INTEGER NOT NULL DEFAULT 104857600,
     egress_credit_per_unit INTEGER NOT NULL DEFAULT 1,
+    force_path_style INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
@@ -184,6 +379,7 @@ const APP_SCHEMA_SQL = `
     traffic_used INTEGER NOT NULL DEFAULT 0,
     traffic_period TEXT NOT NULL DEFAULT '1970-01'
   );
+  CREATE UNIQUE INDEX IF NOT EXISTS org_quotas_org_uniq ON org_quotas(org_id);
   CREATE TABLE IF NOT EXISTS cloud_traffic_reports (
     id TEXT PRIMARY KEY,
     org_id TEXT NOT NULL,
@@ -197,12 +393,17 @@ const APP_SCHEMA_SQL = `
     credits_per_unit INTEGER,
     status TEXT NOT NULL,
     error TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at INTEGER,
+    issued_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
   CREATE UNIQUE INDEX IF NOT EXISTS cloud_traffic_reports_event_uniq ON cloud_traffic_reports(event_id);
   CREATE INDEX IF NOT EXISTS cloud_traffic_reports_org_period_idx ON cloud_traffic_reports(org_id, period);
   CREATE INDEX IF NOT EXISTS cloud_traffic_reports_status_idx ON cloud_traffic_reports(status);
+  CREATE INDEX IF NOT EXISTS cloud_traffic_reports_retry_idx ON cloud_traffic_reports(status, next_retry_at, created_at);
+  CREATE INDEX IF NOT EXISTS cloud_traffic_reports_issued_idx ON cloud_traffic_reports(issued_at);
   CREATE TABLE IF NOT EXISTS org_quota_entitlements (
     id TEXT PRIMARY KEY,
     org_id TEXT NOT NULL,
@@ -222,11 +423,27 @@ const APP_SCHEMA_SQL = `
     ON org_quota_entitlements(org_id, resource_type, status);
   CREATE INDEX IF NOT EXISTS org_quota_entitlements_org_type_idx
     ON org_quota_entitlements(org_id, resource_type, entitlement_type, status);
-  CREATE UNIQUE INDEX IF NOT EXISTS org_quota_entitlements_active_plan_uniq
-    ON org_quota_entitlements(org_id, resource_type, entitlement_type)
-    WHERE status = 'active' AND entitlement_type = 'plan';
   CREATE UNIQUE INDEX IF NOT EXISTS org_quota_entitlements_source_resource_uniq
     ON org_quota_entitlements(source, source_id, resource_type);
+  CREATE TABLE IF NOT EXISTS x402_capacity_purchase_intents (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    cloud_order_id TEXT,
+    cloud_attempt_id TEXT,
+    status TEXT NOT NULL DEFAULT 'created',
+    expires_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS x402_capacity_purchase_intents_org_request_uniq
+    ON x402_capacity_purchase_intents(org_id, resource_id, request_hash);
+  CREATE UNIQUE INDEX IF NOT EXISTS x402_capacity_purchase_intents_org_idempotency_uniq
+    ON x402_capacity_purchase_intents(org_id, idempotency_key);
+  CREATE INDEX IF NOT EXISTS x402_capacity_purchase_intents_attempt_idx
+    ON x402_capacity_purchase_intents(cloud_attempt_id);
   CREATE TABLE IF NOT EXISTS webhook_events (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
@@ -244,8 +461,7 @@ const APP_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS webhook_events_status_idx ON webhook_events(status);
   CREATE TABLE IF NOT EXISTS system_options (
     key TEXT PRIMARY KEY,
-    value TEXT NOT NULL DEFAULT '',
-    public INTEGER DEFAULT 0
+    value TEXT NOT NULL DEFAULT ''
   );
   CREATE TABLE IF NOT EXISTS invite_codes (
     id TEXT PRIMARY KEY,
@@ -282,19 +498,66 @@ const APP_SCHEMA_SQL = `
     created_at INTEGER NOT NULL
   );
   CREATE UNIQUE INDEX IF NOT EXISTS team_invite_links_token_unique ON team_invite_links(token);
-  CREATE TABLE IF NOT EXISTS activity_events (
-    id TEXT PRIMARY KEY,
-    org_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target_type TEXT NOT NULL,
-    target_id TEXT,
-    target_name TEXT NOT NULL,
-    metadata TEXT,
-    created_at INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS activity_events_org_id_idx ON activity_events(org_id);
-  CREATE TABLE IF NOT EXISTS shares (
+	  CREATE TABLE IF NOT EXISTS audit_events (
+		    id TEXT PRIMARY KEY,
+		    event_key TEXT UNIQUE,
+		    org_id TEXT NOT NULL,
+		    user_id TEXT,
+		    action TEXT NOT NULL,
+		    target_type TEXT NOT NULL,
+		    target_id TEXT,
+		    target_name TEXT NOT NULL,
+		    metadata TEXT,
+		    created_at INTEGER NOT NULL,
+		    actor_type TEXT,
+		    actor_ref TEXT,
+		    actor_issuer TEXT
+		  );
+	  CREATE INDEX IF NOT EXISTS audit_events_org_created_idx ON audit_events(org_id, created_at);
+	  CREATE INDEX IF NOT EXISTS audit_events_user_created_idx ON audit_events(user_id, created_at);
+	  CREATE INDEX IF NOT EXISTS audit_events_action_created_idx ON audit_events(action, created_at);
+	  CREATE INDEX IF NOT EXISTS audit_events_target_created_idx ON audit_events(target_type, target_id, created_at);
+		  CREATE TABLE IF NOT EXISTS stats_rollups_hourly (
+		    id TEXT PRIMARY KEY NOT NULL,
+		    bucket_start INTEGER NOT NULL,
+	    org_id TEXT NOT NULL DEFAULT '',
+	    metric_key TEXT NOT NULL,
+	    dimension_key TEXT NOT NULL DEFAULT '',
+	    dimension_value TEXT NOT NULL DEFAULT '',
+	    count INTEGER NOT NULL DEFAULT 0,
+	    bytes INTEGER NOT NULL DEFAULT 0,
+	    unique_count INTEGER NOT NULL DEFAULT 0,
+	    metadata TEXT,
+	    updated_at INTEGER NOT NULL
+		  );
+		  CREATE UNIQUE INDEX IF NOT EXISTS stats_rollups_hourly_bucket_metric_dim_uniq ON stats_rollups_hourly(bucket_start, org_id, metric_key, dimension_key, dimension_value);
+		  CREATE INDEX IF NOT EXISTS stats_rollups_hourly_metric_bucket_idx ON stats_rollups_hourly(metric_key, bucket_start);
+		  CREATE INDEX IF NOT EXISTS stats_rollups_hourly_dimension_bucket_idx ON stats_rollups_hourly(metric_key, dimension_key, bucket_start);
+	  CREATE TABLE IF NOT EXISTS storage_usage_ledger (
+	    id TEXT PRIMARY KEY NOT NULL,
+	    event_key TEXT NOT NULL UNIQUE,
+	    org_id TEXT NOT NULL,
+	    storage_id TEXT NOT NULL,
+	    resource_type TEXT NOT NULL,
+	    resource_id TEXT NOT NULL,
+	    delta_bytes INTEGER NOT NULL,
+	    reason TEXT NOT NULL,
+	    occurred_at INTEGER NOT NULL,
+	    created_at INTEGER NOT NULL
+	  );
+	  CREATE INDEX IF NOT EXISTS storage_usage_ledger_occurred_idx ON storage_usage_ledger(occurred_at);
+	  CREATE INDEX IF NOT EXISTS storage_usage_ledger_org_occurred_idx ON storage_usage_ledger(org_id, occurred_at);
+	  CREATE INDEX IF NOT EXISTS storage_usage_ledger_storage_occurred_idx ON storage_usage_ledger(storage_id, occurred_at);
+	  CREATE TABLE IF NOT EXISTS storage_usage_breakdowns (
+	    org_id TEXT NOT NULL,
+	    category TEXT NOT NULL,
+	    bytes INTEGER NOT NULL DEFAULT 0,
+	    file_count INTEGER NOT NULL DEFAULT 0,
+	    updated_at INTEGER NOT NULL
+	  );
+	  CREATE UNIQUE INDEX IF NOT EXISTS storage_usage_breakdowns_org_category_uniq ON storage_usage_breakdowns(org_id, category);
+	  CREATE INDEX IF NOT EXISTS storage_usage_breakdowns_org_idx ON storage_usage_breakdowns(org_id);
+	  CREATE TABLE IF NOT EXISTS shares (
     id TEXT PRIMARY KEY,
     token TEXT NOT NULL UNIQUE,
     kind TEXT NOT NULL,
@@ -307,9 +570,11 @@ const APP_SCHEMA_SQL = `
     views INTEGER NOT NULL DEFAULT 0,
     downloads INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active',
+    private INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS shares_creator_status_created_idx ON shares(creator_id, status, created_at);
+  CREATE INDEX IF NOT EXISTS shares_creator_private_created_idx ON shares(creator_id, private, created_at);
   CREATE TABLE IF NOT EXISTS share_recipients (
     id TEXT PRIMARY KEY,
     share_id TEXT NOT NULL,
@@ -322,7 +587,12 @@ const APP_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS image_hosting_configs (
     org_id TEXT PRIMARY KEY REFERENCES organization(id) ON DELETE CASCADE,
     custom_domain TEXT UNIQUE,
-    cf_hostname_id TEXT,
+    domain_provider TEXT,
+    provider_hostname_id TEXT,
+    domain_status TEXT,
+    domain_error TEXT,
+    verification_token TEXT,
+    domain_last_checked_at INTEGER,
     domain_verified_at INTEGER,
     referer_allowlist TEXT,
     created_at INTEGER NOT NULL,
@@ -340,11 +610,12 @@ const APP_SCHEMA_SQL = `
     width INTEGER,
     height INTEGER,
     status TEXT NOT NULL DEFAULT 'draft',
+    purged_at INTEGER,
     access_count INTEGER NOT NULL DEFAULT 0,
     last_accessed_at INTEGER,
     created_at INTEGER NOT NULL
   );
-  CREATE UNIQUE INDEX IF NOT EXISTS image_hostings_org_path_uniq ON image_hostings(org_id, path);
+  CREATE UNIQUE INDEX IF NOT EXISTS image_hostings_org_path_uniq ON image_hostings(org_id, path) WHERE purged_at IS NULL;
   CREATE INDEX IF NOT EXISTS image_hostings_org_created_idx ON image_hostings(org_id, created_at);
   CREATE INDEX IF NOT EXISTS image_hostings_token_idx ON image_hostings(token);
   CREATE TABLE IF NOT EXISTS notifications (
@@ -399,7 +670,7 @@ const APP_SCHEMA_SQL = `
     hostname TEXT NOT NULL DEFAULT 'unknown',
     platform TEXT NOT NULL DEFAULT 'unknown',
     arch TEXT NOT NULL DEFAULT 'unknown',
-    engine TEXT NOT NULL DEFAULT 'builtin',
+    engine TEXT NOT NULL DEFAULT 'http',
     capabilities TEXT NOT NULL DEFAULT '[]',
     max_concurrent_tasks INTEGER NOT NULL DEFAULT 1,
     current_tasks INTEGER NOT NULL DEFAULT 0,
@@ -439,25 +710,55 @@ const APP_SCHEMA_SQL = `
     error_message TEXT,
     result_object_id TEXT,
     runtime TEXT,
+    events TEXT NOT NULL DEFAULT '[]',
+    resolve_started_at INTEGER,
+    resolve_completed_at INTEGER,
+    download_completed_at INTEGER,
+    ingest_started_at INTEGER,
+    ingest_completed_at INTEGER,
+    seeding_started_at INTEGER,
+    seeding_stopped_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     assigned_at INTEGER,
     started_at INTEGER,
-    finished_at INTEGER
+    finished_at INTEGER,
+    deleted_at INTEGER
   );
   CREATE INDEX IF NOT EXISTS download_tasks_org_created_idx ON download_tasks(org_id, created_at);
   CREATE INDEX IF NOT EXISTS download_tasks_org_status_idx ON download_tasks(org_id, status);
   CREATE INDEX IF NOT EXISTS download_tasks_org_category_idx ON download_tasks(org_id, category);
   CREATE INDEX IF NOT EXISTS download_tasks_org_tags_idx ON download_tasks(org_id, tags);
   CREATE INDEX IF NOT EXISTS download_tasks_downloader_idx ON download_tasks(assigned_downloader_id, status);
+  CREATE INDEX IF NOT EXISTS download_tasks_org_deleted_created_idx ON download_tasks(org_id, deleted_at, created_at);
+  CREATE INDEX IF NOT EXISTS download_tasks_org_page_idx ON download_tasks(org_id, deleted_at, created_at, id);
+  CREATE INDEX IF NOT EXISTS download_tasks_downloader_page_idx
+    ON download_tasks(assigned_downloader_id, deleted_at, created_at, id);
+  CREATE TABLE IF NOT EXISTS resource_changes (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+    scope_type TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    change_type TEXT NOT NULL,
+    action TEXT,
+    metadata TEXT,
+    occurred_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS resource_changes_scope_sequence_idx
+    ON resource_changes(scope_type, scope_id, sequence);
+  CREATE INDEX IF NOT EXISTS resource_changes_resource_sequence_idx
+    ON resource_changes(resource_type, resource_id, sequence);
+  CREATE INDEX IF NOT EXISTS resource_changes_occurred_idx ON resource_changes(occurred_at);
   CREATE TABLE IF NOT EXISTS object_upload_sessions (
     id TEXT PRIMARY KEY,
     org_id TEXT NOT NULL,
     object_id TEXT NOT NULL,
     storage_id TEXT NOT NULL,
     storage_key TEXT NOT NULL,
-    upload_id TEXT NOT NULL,
+    upload_id TEXT,
     part_size INTEGER NOT NULL,
+    on_conflict TEXT NOT NULL DEFAULT 'fail',
     status TEXT NOT NULL,
     created_by TEXT NOT NULL,
     expires_at INTEGER NOT NULL,
@@ -553,7 +854,12 @@ const APP_SCHEMA_SQL = `
 export async function createTestApp(
   envOverrides: Record<string, string> = {},
   bindingOverrides: Record<string, unknown> = {},
+  backgroundTaskHandler?: (promise: Promise<unknown>) => void,
 ) {
+  // Each test app is a brand-new site; drop origin state cached by a previous
+  // app in the same test file.
+  resetSitePublicOriginCache()
+
   const sqlite = new Database(':memory:')
   sqlite.exec(AUTH_SCHEMA_SQL)
   sqlite.exec(APP_SCHEMA_SQL)
@@ -561,13 +867,14 @@ export async function createTestApp(
   const db = drizzle(sqlite, { schema: { ...schema, ...authSchema } })
   const platform: Platform = {
     db,
-    getEnv: (key: string) => envOverrides[key],
+    getEnv: (key: string) => envOverrides[key] ?? (key === 'BETTER_AUTH_SECRET' ? 'test-secret' : undefined),
     getBinding: <T = unknown>(key: string) => bindingOverrides[key] as T | undefined,
   }
-  const auth = await createAuth(platform, 'test-secret', 'http://localhost:3000')
-  const app = createApp(platform, auth)
+  const auth = await createAuth(platform, 'test-secret', 'http://localhost:3000', undefined, backgroundTaskHandler)
+  const deps = createDeps(platform)
+  const app = createApp(platform, auth, deps)
 
-  return { app, db, auth, platform }
+  return { app, db, auth, platform, deps }
 }
 
 export async function adminHeaders(app: ReturnType<typeof createApp>) {
@@ -579,7 +886,7 @@ export async function adminHeaders(app: ReturnType<typeof createApp>) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: 'admin@example.com', password: 'password123456' }),
   })
-  return { Cookie: signInRes.headers.getSetCookie().join('; ') }
+  return { Cookie: signInRes.headers.getSetCookie().join('; '), Origin: 'http://localhost:3000' }
 }
 
 export async function authedHeaders(
@@ -593,7 +900,9 @@ export async function authedHeaders(
     body: JSON.stringify({ name: 'Test User', email, password }),
   })
   const cookies = signUpRes.headers.getSetCookie()
-  return { Cookie: cookies.join('; ') }
+  // Origin matches the test app's baseURL: cookie-bearing requests to
+  // better-auth endpoints fail the origin check without it, like in a browser
+  return { Cookie: cookies.join('; '), Origin: 'http://localhost:3000' }
 }
 
 const { secretKey: TEST_LICENSE_SECRET, publicKey: TEST_LICENSE_PUBLIC } = generateKeys('public')
@@ -622,12 +931,12 @@ async function seedLicense(
     edition: LicenseEdition
   },
 ) {
-  const { PUBLIC_KEYS } = await import('../licensing/public-keys.js')
+  const { PUBLIC_KEYS } = await import('../domain/license-keys.js')
   if (!PUBLIC_KEYS.includes(TEST_LICENSE_PUBLIC)) {
     PUBLIC_KEYS.unshift(TEST_LICENSE_PUBLIC)
   }
 
-  const { createLicenseBinding } = await import('../licensing/license-state.js')
+  const { createLicenseBindingRepo } = await import('../adapters/repos/license-binding.js')
   const issuedAt = nowSec()
   const expiresAt = issuedAt + 3600
   const cachedCert = sign(TEST_LICENSE_SECRET, {
@@ -646,7 +955,7 @@ async function seedLicense(
     expiresAt,
   })
 
-  await createLicenseBinding(db, {
+  await createLicenseBindingRepo(db).createLicenseBinding({
     cloudBindingId: 'test-binding',
     cloudStoreId: 'store-test-binding',
     instanceId: 'test-instance',

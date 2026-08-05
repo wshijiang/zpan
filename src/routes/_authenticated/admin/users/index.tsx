@@ -4,26 +4,36 @@ import { Search, ShieldCheck, Trash2, UserCheck, UserPlus, UserX } from 'lucide-
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { AdminPageHeader } from '@/components/admin/admin-page-header'
 import { DeleteUserDialog } from '@/components/admin/delete-user-dialog'
 import { SiteInvitationsDialog } from '@/components/admin/site-invitations-dialog'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { batchDeleteUsers, batchUpdateUserStatus, listUsers, type UserWithOrg, updateUserStatus } from '@/lib/api'
-import { formatSize } from '@/lib/format'
+import { getUserQuotaById } from '@/lib/api'
+import { type AdminUser, adminListUsers, adminRemoveUser, adminSetUserBanned } from '@/lib/auth-client'
+import { formatDate, formatStorageUsage, getInitials } from '@/lib/format'
 
 export const Route = createFileRoute('/_authenticated/admin/users/')({
   component: UsersPage,
 })
 
-type UserRow = UserWithOrg
+type UserRow = AdminUser & { quotaUsed: number; quotaTotal: number }
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
 const DEFAULT_PAGE_SIZE = 20
 
-function UsersPage() {
+export function UsersPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -32,17 +42,40 @@ function UsersPage() {
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
 
   const [deleteDialogUser, setDeleteDialogUser] = useState<{ id: string; name: string } | null>(null)
+  const [batchDeleteDialogOpen, setBatchDeleteDialogOpen] = useState(false)
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
 
   const usersQuery = useQuery({
     queryKey: ['admin', 'users', page, pageSize, search],
-    queryFn: () => listUsers(page, pageSize, search),
+    queryFn: () => adminListUsers({ limit: pageSize, offset: (page - 1) * pageSize, search }),
   })
 
+  const baseUsers = useMemo(() => usersQuery.data?.users ?? [], [usersQuery.data])
+  const pageUserIds = useMemo(() => baseUsers.map((user) => user.id), [baseUsers])
+
+  // better-auth's admin list knows identity but not storage quota — fan out over
+  // the per-user quota sub-resource for the visible page and merge the results.
+  const quotaQuery = useQuery({
+    queryKey: ['admin', 'user-quotas', pageUserIds],
+    queryFn: async () => {
+      const entries = await Promise.all(pageUserIds.map(async (id) => [id, await getUserQuotaById(id)] as const))
+      return new Map(entries)
+    },
+    enabled: pageUserIds.length > 0,
+  })
+
+  const users: UserRow[] = useMemo(() => {
+    const quota = quotaQuery.data
+    return baseUsers.map((user) => ({
+      ...user,
+      quotaUsed: quota?.get(user.id)?.used ?? 0,
+      quotaTotal: quota?.get(user.id)?.total ?? 0,
+    }))
+  }, [baseUsers, quotaQuery.data])
+
   const toggleStatusMutation = useMutation({
-    mutationFn: ({ userId, status }: { userId: string; status: 'active' | 'disabled' }) =>
-      updateUserStatus(userId, status),
+    mutationFn: ({ userId, banned }: { userId: string; banned: boolean }) => adminSetUserBanned(userId, banned),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
       toast.success(t('admin.users.statusUpdated'))
@@ -53,12 +86,12 @@ function UsersPage() {
   })
 
   const batchStatusMutation = useMutation({
-    mutationFn: ({ ids, status }: { ids: string[]; status: 'active' | 'disabled' }) =>
-      batchUpdateUserStatus(ids, status),
-    onSuccess: (result) => {
+    mutationFn: ({ ids, banned }: { ids: string[]; banned: boolean }) =>
+      Promise.all(ids.map((id) => adminSetUserBanned(id, banned))),
+    onSuccess: (_result, variables) => {
       setSelectedIds([])
       queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
-      toast.success(t('admin.users.batchStatusUpdated', { count: result.updated }))
+      toast.success(t('admin.users.batchStatusUpdated', { count: variables.ids.length }))
     },
     onError: (err) => {
       toast.error(err.message)
@@ -66,26 +99,22 @@ function UsersPage() {
   })
 
   const batchDeleteMutation = useMutation({
-    mutationFn: (ids: string[]) => batchDeleteUsers(ids),
-    onSuccess: (result) => {
+    mutationFn: (ids: string[]) => Promise.all(ids.map((id) => adminRemoveUser(id))),
+    onSuccess: (_result, ids) => {
       setSelectedIds([])
+      setBatchDeleteDialogOpen(false)
       queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
-      toast.success(t('admin.users.batchDeleted', { count: result.deleted }))
+      toast.success(t('admin.users.batchDeleted', { count: ids.length }))
     },
     onError: (err) => {
       toast.error(err.message)
     },
   })
 
-  const users: UserRow[] = useMemo(() => {
-    return usersQuery.data?.items ?? []
-  }, [usersQuery.data])
-
   const total = usersQuery.data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  const isLoading = usersQuery.isLoading
+  const isUsersLoading = usersQuery.isLoading
   const selectedCount = selectedIds.length
-  const pageUserIds = users.map((user) => user.id)
   const allPageSelected = pageUserIds.length > 0 && pageUserIds.every((id) => selectedIds.includes(id))
   const batchPending = batchStatusMutation.isPending || batchDeleteMutation.isPending
 
@@ -118,38 +147,31 @@ function UsersPage() {
 
   function handleBatchDelete() {
     if (selectedCount === 0) return
-    if (!window.confirm(t('admin.users.batchDeleteConfirm', { count: selectedCount }))) return
-    batchDeleteMutation.mutate(selectedIds)
-  }
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-20 text-muted-foreground">
-        <p>{t('common.loading')}</p>
-      </div>
-    )
+    setBatchDeleteDialogOpen(true)
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-xl font-semibold">{t('admin.users.title')}</h2>
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-          <div className="relative w-full sm:w-64">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder={t('admin.users.searchPlaceholder')}
-              value={search}
-              onChange={handleSearchChange}
-              className="pl-9"
-            />
-          </div>
-          <Button onClick={() => setInviteDialogOpen(true)}>
-            <UserPlus />
-            {t('admin.users.inviteUser')}
-          </Button>
-        </div>
-      </div>
+      <AdminPageHeader
+        title={t('admin.users.title')}
+        actions={
+          <>
+            <div className="relative w-full sm:w-64">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder={t('admin.users.searchPlaceholder')}
+                value={search}
+                onChange={handleSearchChange}
+                className="pl-9"
+              />
+            </div>
+            <Button onClick={() => setInviteDialogOpen(true)}>
+              <UserPlus />
+              {t('admin.users.inviteUser')}
+            </Button>
+          </>
+        }
+      />
 
       {selectedCount > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/30 px-3 py-2">
@@ -159,7 +181,7 @@ function UsersPage() {
               variant="outline"
               size="sm"
               disabled={batchPending}
-              onClick={() => batchStatusMutation.mutate({ ids: selectedIds, status: 'disabled' })}
+              onClick={() => batchStatusMutation.mutate({ ids: selectedIds, banned: true })}
             >
               <UserX />
               {t('admin.users.batchDisable')}
@@ -168,7 +190,7 @@ function UsersPage() {
               variant="outline"
               size="sm"
               disabled={batchPending}
-              onClick={() => batchStatusMutation.mutate({ ids: selectedIds, status: 'active' })}
+              onClick={() => batchStatusMutation.mutate({ ids: selectedIds, banned: false })}
             >
               <UserCheck />
               {t('admin.users.batchEnable')}
@@ -185,26 +207,26 @@ function UsersPage() {
         <table className="w-full table-fixed text-sm">
           <thead>
             <tr className="border-b bg-muted/50">
-              <th className="w-[4%] px-4 py-3 text-left font-medium">
+              <th className="w-[10%] px-4 py-3 text-left font-medium sm:w-[4%]">
                 <Checkbox
                   aria-label={t('admin.users.selectPage')}
                   checked={allPageSelected}
                   onCheckedChange={(checked) => togglePageSelection(checked === true)}
                 />
               </th>
-              <th className="w-[21%] px-4 py-3 text-left font-medium">{t('admin.users.colName')}</th>
+              <th className="w-[38%] px-4 py-3 text-left font-medium sm:w-[21%]">{t('admin.users.colName')}</th>
               <th className="hidden w-[23%] px-4 py-3 text-left font-medium sm:table-cell">
                 {t('admin.users.colEmail')}
               </th>
-              <th className="w-[9%] px-4 py-3 text-left font-medium">{t('admin.users.colRole')}</th>
-              <th className="w-[10%] px-4 py-3 text-left font-medium">{t('admin.users.colStatus')}</th>
+              <th className="w-[18%] px-4 py-3 text-left font-medium sm:w-[9%]">{t('admin.users.colRole')}</th>
+              <th className="w-[18%] px-4 py-3 text-left font-medium sm:w-[10%]">{t('admin.users.colStatus')}</th>
               <th className="hidden w-[14%] px-4 py-3 text-left font-medium md:table-cell">
                 {t('admin.users.colQuota')}
               </th>
               <th className="hidden w-[11%] truncate px-4 py-3 text-left font-medium lg:table-cell">
                 {t('admin.users.colCreatedAt')}
               </th>
-              <th className="w-[8%] px-4 py-3 text-right font-medium">{t('admin.users.colActions')}</th>
+              <th className="w-[16%] px-4 py-3 text-right font-medium sm:w-[8%]">{t('admin.users.colActions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -217,22 +239,25 @@ function UsersPage() {
                 showQuota
                 onSelect={(checked) => toggleUserSelection(user.id, checked)}
                 onOpenUser={() => navigate({ to: '/admin/users/$userId', params: { userId: user.id } })}
-                onToggleStatus={() =>
-                  toggleStatusMutation.mutate({
-                    userId: user.id,
-                    status: user.banned ? 'active' : 'disabled',
-                  })
-                }
+                onToggleStatus={() => toggleStatusMutation.mutate({ userId: user.id, banned: !user.banned })}
                 onDelete={() => setDeleteDialogUser({ id: user.id, name: user.name || user.username })}
               />
             ))}
-            {users.length === 0 && (
+            {isUsersLoading ? (
+              <tr>
+                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                  <div role="status" aria-live="polite">
+                    {t('common.loading')}
+                  </div>
+                </td>
+              </tr>
+            ) : users.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
                   {t('admin.users.noUsers')}
                 </td>
               </tr>
-            )}
+            ) : null}
           </tbody>
         </table>
       </div>
@@ -275,6 +300,31 @@ function UsersPage() {
         user={deleteDialogUser}
       />
 
+      <Dialog open={batchDeleteDialogOpen} onOpenChange={setBatchDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('admin.users.batchDelete')}</DialogTitle>
+            <DialogDescription>{t('admin.users.batchDeleteConfirm', { count: selectedCount })}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setBatchDeleteDialogOpen(false)}
+              disabled={batchDeleteMutation.isPending}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => batchDeleteMutation.mutate(selectedIds)}
+              disabled={batchDeleteMutation.isPending || selectedCount === 0}
+            >
+              {batchDeleteMutation.isPending ? t('common.loading') : t('admin.users.batchDelete')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <SiteInvitationsDialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen} />
     </div>
   )
@@ -307,7 +357,7 @@ function UserTableRow({
     : 'bg-green-500/10 text-green-700 dark:text-green-400'
 
   const roleLabel = user.role === 'admin' ? t('admin.users.roleAdmin') : t('admin.users.roleMember')
-  const quotaLabel = formatQuota(user.quotaUsed, user.quotaTotal)
+  const quotaLabel = formatStorageUsage(user.quotaUsed, user.quotaTotal)
 
   return (
     <tr className="border-b last:border-0 hover:bg-muted/30">
@@ -368,23 +418,4 @@ function UserTableRow({
       </td>
     </tr>
   )
-}
-
-function formatQuota(used: number, total: number): string {
-  if (total <= 0) return `${formatSize(used)} / --`
-  return `${formatSize(used)} / ${formatSize(total)}`
-}
-
-function formatDate(timestamp: number): string {
-  const d = new Date(timestamp)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString()
-}
-
-function getInitials(name: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0].toUpperCase())
-    .join('')
 }

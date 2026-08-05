@@ -1,262 +1,229 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createFileRoute } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import type { StorageUsageCategory, StorageUsageItem } from '@shared/types'
+import { useQuery } from '@tanstack/react-query'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { ChevronRight, Cloud } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
-import {
-  CreditBalanceButton,
-  CurrentPlanCard,
-  FreeQuotaCard,
-  StorageOrderHistoryDialog,
-  StoragePackages,
-  StorageUnavailableState,
-} from '@/components/store/storage-panels'
+import { STORAGE_CATEGORY_META, StorageCleanupDialog } from '@/components/storage/storage-cleanup-dialog'
+import { CheckoutConfirmDialog, type CheckoutSelection } from '@/components/store/checkout-confirm-dialog'
+import { openCheckoutTab, resolveCheckoutSelection } from '@/components/store/checkout-navigation'
+import { StoragePackages } from '@/components/store/storage-panels'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  ApiError,
-  cancelCloudOrder,
-  getCloudCredits,
-  getUserQuota,
-  listCloudCreditLedgerEntries,
-  listCloudCreditProducts,
-  listCloudOrders,
-  listCloudProducts,
-  redeemCloudGiftCard,
-} from '@/lib/api'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { getStorageUsage, getUserQuota, listCloudProducts, listCloudStoreTargets } from '@/lib/api'
 import { useActiveOrganization } from '@/lib/auth-client'
-import { openNewTab } from '@/lib/browser-navigation'
+import { formatSize } from '@/lib/format'
 
 export const Route = createFileRoute('/_authenticated/storage')({
   component: StoragePage,
 })
 
 export function StoragePage() {
-  const { t } = useTranslation()
-  const queryClient = useQueryClient()
-  const [checkoutRefreshActive, setCheckoutRefreshActive] = useState(false)
-  const [cancelOrderId, setCancelOrderId] = useState<string | null>(null)
+  const { t, i18n } = useTranslation()
+  const navigate = useNavigate()
   const { data: activeOrg } = useActiveOrganization()
-  const cloudStoreQuery = useQuery({
-    queryKey: ['cloud-store', 'packages'],
-    queryFn: listCloudProducts,
-    retry: false,
-  })
-  const targetOrgId = activeOrg?.id ?? ''
-  const ordersQuery = useQuery({
-    queryKey: ['cloud-store', 'orders', targetOrgId],
-    queryFn: () => listCloudOrders(),
-    enabled: cloudStoreQuery.isSuccess && !!targetOrgId,
-    retry: false,
+  const orgId = activeOrg?.id ?? ''
+  const [selectedCategory, setSelectedCategory] = useState<StorageUsageCategory | null>(null)
+  const [plansOpen, setPlansOpen] = useState(false)
+  const [checkoutSelection, setCheckoutSelection] = useState<CheckoutSelection | null>(null)
+
+  const usageQuery = useQuery({
+    queryKey: ['storage-usage', orgId],
+    queryFn: getStorageUsage,
+    enabled: !!orgId,
   })
   const quotaQuery = useQuery({
-    queryKey: ['user', 'quota', targetOrgId],
+    queryKey: ['user', 'quota', orgId],
     queryFn: getUserQuota,
-    enabled: cloudStoreQuery.isSuccess && !!targetOrgId,
+    enabled: !!orgId,
     retry: false,
   })
-  const creditsQuery = useQuery({
-    queryKey: ['cloud-store', 'credits', targetOrgId],
-    queryFn: getCloudCredits,
-    enabled: cloudStoreQuery.isSuccess && !!targetOrgId,
+  const productsQuery = useQuery({ queryKey: ['cloud-store', 'packages'], queryFn: listCloudProducts, retry: false })
+  const targetsQuery = useQuery({
+    queryKey: ['cloud-store', 'targets'],
+    queryFn: listCloudStoreTargets,
+    enabled: productsQuery.isSuccess,
     retry: false,
   })
-  const creditProductsQuery = useQuery({
-    queryKey: ['cloud-store', 'credits', 'products'],
-    queryFn: listCloudCreditProducts,
-    enabled: cloudStoreQuery.isSuccess,
-    retry: false,
-  })
-  const creditLedgerQuery = useQuery({
-    queryKey: ['cloud-store', 'credits', 'ledger-entries', targetOrgId],
-    queryFn: listCloudCreditLedgerEntries,
-    enabled: cloudStoreQuery.isSuccess && !!targetOrgId,
-    retry: false,
-  })
-  const currentOrders = ordersQuery.data?.items ?? []
-  const deliveredCheckoutCount = currentOrders.filter((order) => order.fulfillmentStatus === 'fulfilled').length
-  const hasActiveSubscription = quotaQuery.data?.currentPlan?.subscription === true
-  const credits = creditsQuery.data ? { balance: creditsQuery.data.balance } : undefined
 
-  useEffect(() => {
-    if (deliveredCheckoutCount > 0) queryClient.invalidateQueries({ queryKey: ['user', 'quota'] })
-  }, [deliveredCheckoutCount, queryClient])
+  const currentTarget = targetsQuery.data?.items.find((item) => item.orgId === orgId)
+  const canManageBilling = targetsQuery.isSuccess && (currentTarget?.type !== 'team' || currentTarget?.role === 'owner')
 
-  useEffect(() => {
-    if (!checkoutRefreshActive) return
-    const interval = window.setInterval(() => {
-      queryClient.invalidateQueries({ queryKey: ['user', 'quota'] })
-      queryClient.invalidateQueries({ queryKey: ['cloud-store', 'orders'] })
-      queryClient.invalidateQueries({ queryKey: ['cloud-store', 'credits'] })
-    }, 5000)
-    const timeout = window.setTimeout(() => setCheckoutRefreshActive(false), 120000)
-    return () => {
-      window.clearInterval(interval)
-      window.clearTimeout(timeout)
+  const displayBreakdowns = usageQuery.data?.breakdowns ?? []
+  const categoryBytes = displayBreakdowns.reduce((sum, row) => sum + row.bytes, 0)
+  const quotaBytes = usageQuery.data?.quotaBytes ?? 0
+  const usedBytes = usageQuery.data?.usedBytes ?? categoryBytes
+  const availableBytes = Math.max(0, quotaBytes - usedBytes)
+  const fileCount = displayBreakdowns.reduce((sum, row) => sum + row.fileCount, 0)
+  const planName = usageQuery.data?.currentPlan?.name ?? t('storage.freePlanName')
+
+  function requestCheckout(packageId: string, priceId: string) {
+    const selection = resolveCheckoutSelection(productsQuery.data?.items ?? [], packageId, priceId)
+    if (selection) setCheckoutSelection(selection)
+  }
+
+  function startCheckout(packageId: string, priceId: string, promotionCode?: string) {
+    openCheckoutTab({ action: 'checkout', packageId, priceId, promotionCode })
+    setPlansOpen(false)
+  }
+
+  function openFileLocation(item: StorageUsageItem) {
+    setSelectedCategory(null)
+    if (item.source === 'trash') {
+      navigate({ to: '/trash' })
+      return
     }
-  }, [checkoutRefreshActive, queryClient])
-
-  const cancelOrderMutation = useMutation({
-    mutationFn: (orderId: string) => cancelCloudOrder(orderId),
-    onSuccess: () => {
-      toast.success(t('storage.cancelSuccess'))
-      queryClient.invalidateQueries({ queryKey: ['cloud-store', 'orders'] })
-      queryClient.invalidateQueries({ queryKey: ['cloud-store', 'credits'] })
-    },
-    onError: (err) => {
-      toast.error(err.message)
-    },
-  })
-
-  const redeemMutation = useMutation({
-    mutationFn: (code: string) => redeemCloudGiftCard(code),
-    onSuccess: (result) => {
-      toast.success(
-        t('storage.redeemSuccess', {
-          amount: result.redeemedCredits,
-        }),
-      )
-      queryClient.invalidateQueries({ queryKey: ['cloud-store', 'credits'] })
-    },
-    onError: (err) => {
-      toast.error(err.message)
-    },
-  })
-
-  function startCheckout(packageId: string, priceId: string) {
-    openCheckoutTab({ action: 'checkout', packageId, priceId })
-    setCheckoutRefreshActive(true)
-    queryClient.invalidateQueries({ queryKey: ['user', 'quota'] })
-    queryClient.invalidateQueries({ queryKey: ['cloud-store', 'orders'] })
+    if (item.source === 'image_hosting') {
+      navigate({ to: '/image-host' })
+      return
+    }
+    navigate({ to: '/files', search: item.parentPath ? { path: item.parentPath } : {} })
   }
 
-  function continuePayment(orderId: string) {
-    openCheckoutTab({ action: 'payment', orderId })
-    setCheckoutRefreshActive(true)
-    queryClient.invalidateQueries({ queryKey: ['cloud-store', 'orders'] })
-  }
-
-  function managePlan() {
-    openCheckoutTab({ action: 'portal' })
-  }
-
-  function cancelOrder(orderId: string) {
-    setCancelOrderId(orderId)
-  }
-
-  function confirmCancelOrder() {
-    if (!cancelOrderId) return
-    cancelOrderMutation.mutate(cancelOrderId, {
-      onSuccess: () => {
-        setCancelOrderId(null)
-      },
-    })
-  }
-
-  if (cloudStoreQuery.isLoading) {
+  if (usageQuery.isLoading) {
     return <p className="py-20 text-center text-muted-foreground">{t('common.loading')}</p>
   }
 
-  if (cloudStoreQuery.isError) {
-    const disabled = isCloudStoreDisabledError(cloudStoreQuery.error)
-    return <StorageUnavailableState disabled={disabled} />
-  }
-
   return (
-    <div className="max-w-6xl space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="space-y-1">
-          <h2 className="text-2xl font-semibold tracking-tight">{t('storage.title')}</h2>
-          <p className="text-sm text-muted-foreground">{t('storage.subtitle')}</p>
+    <div className="mx-auto max-w-5xl space-y-6 pb-10">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{t('storage.title')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('storage.managementSubtitle')}</p>
         </div>
-        <div className="flex flex-wrap justify-end gap-2">
-          <CreditBalanceButton
-            credits={credits}
-            products={creditProductsQuery.data?.items ?? []}
-            entries={creditLedgerQuery.data?.items ?? []}
-            loading={creditLedgerQuery.isLoading}
-            onRedeem={(code) => redeemMutation.mutate(code)}
-            onCheckout={startCheckout}
-            isRedeeming={redeemMutation.isPending}
-            checkoutDisabled={!targetOrgId}
-          />
-          <StorageOrderHistoryDialog
-            orders={currentOrders}
-            onContinuePayment={continuePayment}
-            onCancelOrder={cancelOrder}
-            continuingOrderId={null}
-            cancelingOrderId={cancelOrderMutation.isPending ? cancelOrderMutation.variables : null}
-          />
-        </div>
-      </div>
+        <Button onClick={() => setPlansOpen(true)} disabled={!canManageBilling}>
+          {t('storage.expandStorage')}
+        </Button>
+      </header>
 
-      {checkoutRefreshActive && (
-        <div className="rounded-md border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-          {t('storage.checkoutPending')}
+      <section className="rounded-2xl border bg-card p-6 shadow-sm">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <span className="text-3xl font-semibold tabular-nums">{formatSize(usedBytes)}</span>
+            <span className="ml-2 text-muted-foreground">/ {formatSize(quotaBytes)}</span>
+          </div>
+          <div className="flex items-center gap-3 rounded-xl bg-muted/60 px-4 py-3">
+            <span className="rounded-full bg-background p-2 text-primary shadow-sm">
+              <Cloud className="size-4" />
+            </span>
+            <div>
+              <p className="text-xs text-muted-foreground">{t('storage.currentPlan')}</p>
+              <p className="text-sm font-medium">
+                {planName} · {formatSize(quotaBytes)}
+              </p>
+            </div>
+          </div>
         </div>
-      )}
 
-      <div className="space-y-6">
-        {hasActiveSubscription && quotaQuery.data ? (
-          <CurrentPlanCard
-            quota={quotaQuery.data}
-            creditsBalance={creditsQuery.data?.balance}
-            onManagePlan={managePlan}
-            isManagingPlan={false}
-          />
-        ) : (
-          <FreeQuotaCard quota={quotaQuery.data} creditsBalance={creditsQuery.data?.balance} />
-        )}
-        <StoragePackages
-          packages={cloudStoreQuery.data?.items ?? []}
-          disabled={!targetOrgId}
-          currentPlan={quotaQuery.data?.currentPlan ?? null}
-          onCheckout={startCheckout}
-          onManagePlan={managePlan}
-        />
-      </div>
-      <Dialog open={!!cancelOrderId} onOpenChange={(open) => !open && setCancelOrderId(null)}>
-        <DialogContent>
+        <div
+          role="img"
+          className="mt-6 flex h-3 overflow-hidden rounded-full bg-muted"
+          aria-label={t('storage.usageAria', { used: formatSize(usedBytes), total: formatSize(quotaBytes) })}
+        >
+          {displayBreakdowns
+            .filter((row) => row.bytes > 0)
+            .map((row) => (
+              <span
+                key={row.category}
+                style={{
+                  width: `${quotaBytes > 0 ? (row.bytes / quotaBytes) * 100 : 0}%`,
+                  backgroundColor: STORAGE_CATEGORY_META[row.category].color,
+                }}
+                title={`${t(`storage.category.${row.category}`)} · ${formatSize(row.bytes)}`}
+              />
+            ))}
+          {availableBytes > 0 && <span className="flex-1" title={t('storage.available')} />}
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
+          {displayBreakdowns
+            .filter((row) => row.bytes > 0)
+            .slice(0, 6)
+            .map((row) => (
+              <span key={row.category} className="flex items-center gap-1.5">
+                <i
+                  className="size-2 rounded-full"
+                  style={{ backgroundColor: STORAGE_CATEGORY_META[row.category].color }}
+                />
+                {t(`storage.category.${row.category}`)}
+              </span>
+            ))}
+          <span className="flex items-center gap-1.5">
+            <i className="size-2 rounded-full bg-muted-foreground/25" />
+            {t('storage.available')} {formatSize(availableBytes)}
+          </span>
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-2xl border bg-card shadow-sm">
+        <div className="flex items-end justify-between border-b px-6 py-5">
+          <div>
+            <h2 className="font-semibold">{t('storage.spaceUsage')}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{t('storage.byFileType')}</p>
+          </div>
+          <span className="text-sm text-muted-foreground">{t('storage.fileCount', { count: fileCount })}</span>
+        </div>
+        <div>
+          {displayBreakdowns.map((row) => {
+            const meta = STORAGE_CATEGORY_META[row.category]
+            const Icon = meta.icon
+            return (
+              <button
+                type="button"
+                key={row.category}
+                className="flex w-full items-center gap-4 border-b px-6 py-4 text-left transition-colors last:border-b-0 hover:bg-muted/45"
+                onClick={() => setSelectedCategory(row.category)}
+              >
+                <span
+                  className="flex size-10 items-center justify-center rounded-xl"
+                  style={{ color: meta.color, backgroundColor: `${meta.color}18` }}
+                >
+                  <Icon className="size-5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <strong className="block text-sm font-medium">{t(`storage.category.${row.category}`)}</strong>
+                  <small className="text-muted-foreground">{t('storage.fileCount', { count: row.fileCount })}</small>
+                </span>
+                <span className="text-sm font-medium tabular-nums">{formatSize(row.bytes)}</span>
+                <ChevronRight className="size-4 text-muted-foreground" />
+              </button>
+            )
+          })}
+        </div>
+      </section>
+
+      <StorageCleanupDialog
+        category={selectedCategory}
+        breakdowns={displayBreakdowns}
+        onCategoryChange={setSelectedCategory}
+        onOpenLocation={openFileLocation}
+        onOpenChange={(open) => !open && setSelectedCategory(null)}
+      />
+
+      <Dialog open={plansOpen} onOpenChange={setPlansOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
-            <DialogTitle>{t('storage.cancelOrder')}</DialogTitle>
-            <DialogDescription>{t('storage.cancelConfirm')}</DialogDescription>
+            <DialogTitle>{t('storage.availablePlansTitle')}</DialogTitle>
+            <DialogDescription>{t('storage.availablePlansDescription')}</DialogDescription>
           </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelOrderId(null)} disabled={cancelOrderMutation.isPending}>
-              {t('common.cancel')}
-            </Button>
-            <Button variant="destructive" onClick={confirmCancelOrder} disabled={cancelOrderMutation.isPending}>
-              {cancelOrderMutation.isPending ? t('common.loading') : t('common.confirm')}
-            </Button>
-          </DialogFooter>
+          <StoragePackages
+            packages={productsQuery.data?.items ?? []}
+            disabled={!orgId}
+            currentPlan={quotaQuery.data?.currentPlan ?? null}
+            showHeader={false}
+            onCheckout={requestCheckout}
+            onManagePlan={() => openCheckoutTab({ action: 'portal' })}
+          />
         </DialogContent>
       </Dialog>
+
+      <CheckoutConfirmDialog
+        key={checkoutSelection?.priceId ?? 'none'}
+        selection={checkoutSelection}
+        language={i18n.resolvedLanguage ?? 'en'}
+        onOpenChange={(open) => !open && setCheckoutSelection(null)}
+        onConfirm={startCheckout}
+      />
     </div>
   )
-}
-
-type CheckoutTabInput =
-  | { action: 'checkout'; packageId: string; priceId: string }
-  | { action: 'payment'; orderId: string }
-  | { action: 'portal' }
-
-function openCheckoutTab(input: CheckoutTabInput) {
-  const search = new URLSearchParams({ action: input.action })
-  if (input.action === 'checkout') {
-    search.set('packageId', input.packageId)
-    search.set('priceId', input.priceId)
-  }
-  if (input.action === 'payment') search.set('orderId', input.orderId)
-  openNewTab(`/store/checkout?${search.toString()}`)
-}
-
-function isCloudStoreDisabledError(error: unknown) {
-  return error instanceof ApiError && error.body.error === 'quota_store_disabled'
 }

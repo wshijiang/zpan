@@ -6,6 +6,7 @@ import {
   orderListResponseSchema,
   productPriceSchema,
   updateProductSchema,
+  x402PaymentAttemptSchema,
 } from 'zpan-cloud-sdk'
 import { type CloudOrderQuotaChange, legacyCloudProductDeliverableSchema } from './cloud-store-legacy'
 
@@ -44,6 +45,29 @@ export const cloudOrderSchema = commerceOrderSchema.extend({
 export const cloudOrdersResponseSchema = orderListResponseSchema.extend({
   items: z.array(cloudOrderSchema),
 })
+
+export const x402PaymentRequiredSchema = x402PaymentAttemptSchema.shape.paymentRequired
+export type X402PaymentRequired = z.infer<typeof x402PaymentRequiredSchema>
+const capacityPurchaseResultBaseSchema = z
+  .object({
+    attemptId: z.string().min(1),
+    orderId: z.string().min(1),
+    resourceId: z.string().min(1),
+    requestHash: z.string().min(1),
+  })
+  .strict()
+export const capacityPurchasePendingResultSchema = capacityPurchaseResultBaseSchema.extend({
+  status: z.literal('pending'),
+})
+export const capacityPurchaseDeliveredResultSchema = capacityPurchaseResultBaseSchema.extend({
+  status: z.literal('delivered'),
+})
+export const capacityPurchaseResultSchema = z.discriminatedUnion('status', [
+  capacityPurchasePendingResultSchema,
+  capacityPurchaseDeliveredResultSchema,
+])
+
+export type CapacityPurchaseResult = z.infer<typeof capacityPurchaseResultSchema>
 
 function validateUniformPriceBilling(
   prices: CloudProductPrice[],
@@ -179,8 +203,25 @@ export const checkoutInputSchema = z
   .object({
     packageId: z.string().min(1),
     priceId: z.string().min(1).optional(),
+    promotionCode: z.string().trim().min(1).optional(),
   })
   .strict()
+
+export const discountQuoteInputSchema = z
+  .object({
+    code: z.string().trim().min(1).max(64),
+    priceId: z.string().trim().min(1),
+    quantity: z.number().int().positive().optional(),
+  })
+  .strict()
+
+export const discountQuoteSchema = z.object({
+  code: z.string(),
+  currency: z.string(),
+  subtotal: z.number().int(),
+  discount: z.number().int(),
+  total: z.number().int(),
+})
 
 export const giftCardStatusSchema = z.enum(['active', 'redeemed', 'disabled', 'expired', 'revoked'])
 
@@ -204,6 +245,8 @@ export type CloudOrderFulfillmentPayload = z.infer<typeof cloudOrderFulfillmentP
 export type CloudOrderItem = z.infer<typeof cloudOrderItemSchema>
 export type CloudOrder = z.infer<typeof cloudOrderSchema>
 export type CheckoutInput = z.infer<typeof checkoutInputSchema>
+export type DiscountQuoteInput = z.infer<typeof discountQuoteInputSchema>
+export type DiscountQuote = z.infer<typeof discountQuoteSchema>
 export type GiftCardStatus = z.infer<typeof giftCardStatusSchema>
 export type CreateGiftCardInput = z.input<typeof createGiftCardInputSchema>
 export type DisableGiftCardInput = z.infer<typeof disableGiftCardSchema>

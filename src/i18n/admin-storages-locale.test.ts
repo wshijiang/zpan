@@ -18,28 +18,105 @@ const ADMIN_STORAGES_KEYS = [
   'admin.storages.updated',
   'admin.storages.deleted',
   'admin.storages.noStorages',
-  'admin.storages.colTitle',
-  'admin.storages.colMode',
   'admin.storages.colBucket',
+  'admin.storages.colAccessKey',
   'admin.storages.colEndpoint',
+  'admin.storages.colEgressBilling',
   'admin.storages.colStatus',
+  'admin.storages.colHealth',
   'admin.storages.colActions',
-  'admin.storages.modePrivate',
-  'admin.storages.modePublic',
-  'admin.storages.statusActive',
-  'admin.storages.statusInactive',
-  'admin.storages.fieldTitle',
-  'admin.storages.fieldMode',
+  'admin.storages.healthUntested',
+  'admin.storages.healthTesting',
+  'admin.storages.healthSaveFailed',
+  'admin.storages.enableAction',
+  'admin.storages.disableAction',
+  'admin.storages.enableSuccess',
+  'admin.storages.disableSuccess',
+  'admin.storages.cardActions',
+  'admin.storages.manageAction',
+  'admin.storages.available',
+  'admin.storages.unbounded',
+  'admin.storages.usedLabel',
+  'admin.storages.capacityUnbounded',
+  'admin.storages.capacityAria',
+  'admin.storages.lastChecked',
+  'admin.storages.neverChecked',
+  'admin.storages.statusReason.cors',
+  'admin.storages.statusReason.authentication_failed',
+  'admin.storages.statusReason.permission_denied',
+  'admin.storages.statusReason.bucket_not_found',
+  'admin.storages.statusReason.network_error',
+  'admin.storages.statusReason.unknown',
+  'admin.storages.noMatches',
+  'admin.storages.searchPlaceholder',
+  'admin.storages.filter.all',
+  'admin.storages.filter.healthy',
+  'admin.storages.filter.attention',
+  'admin.storages.filter.failed',
+  'admin.storages.filter.disabled',
+  'admin.storages.sort.default',
+  'admin.storages.sort.usage',
+  'admin.storages.sort.used',
+  'admin.storages.sort.bucket',
+  'admin.storages.cardStatus.healthy',
+  'admin.storages.cardStatus.attention',
+  'admin.storages.cardStatus.failed',
+  'admin.storages.cardStatus.disabled',
+  'admin.storages.cardStatus.testing',
+  'admin.storages.overview.backends',
+  'admin.storages.overview.enabled',
+  'admin.storages.overview.capacity',
+  'admin.storages.overview.bounded',
+  'admin.storages.overview.used',
+  'admin.storages.overview.usage',
+  'admin.storages.overview.health',
+  'admin.storages.overview.healthy',
+  'admin.storages.testAction',
+  'admin.storages.testDialogTitle',
+  'admin.storages.testStepCreate',
+  'admin.storages.testStepUpload',
+  'admin.storages.testStepCleanup',
+  'admin.storages.testStepDone',
+  'admin.storages.testStepFailed',
+  'admin.storages.testStepRunning',
+  'admin.storages.testStepPending',
+  'admin.storages.testSuccess',
+  'admin.storages.testNoUploadUrl',
+  'admin.storages.testUploadFailed',
+  'admin.storages.testCleanupFailed',
+  'admin.storages.testCorsFailure',
+  'admin.storages.testCorsConfig',
+  'admin.storages.testCorsCaveat',
   'admin.storages.fieldBucket',
+  'admin.storages.bucketPlaceholder',
   'admin.storages.fieldEndpoint',
+  'admin.storages.endpointPlaceholder',
   'admin.storages.fieldRegion',
+  'admin.storages.regionPlaceholder',
   'admin.storages.fieldAccessKey',
+  'admin.storages.accessKeyPlaceholder',
   'admin.storages.fieldSecretKey',
-  'admin.storages.fieldCustomHost',
-  'admin.storages.customHostPlaceholder',
+  'admin.storages.secretKeyPlaceholder',
+  'admin.storages.showSecretKey',
+  'admin.storages.hideSecretKey',
+  'admin.storages.fieldForcePathStyle',
+  'admin.storages.forcePathStyleHint',
   'admin.storages.fieldCapacity',
-  'admin.storages.capacityUnlimited',
+  'admin.storages.capacityPlaceholder',
   'admin.storages.capacityHint',
+  'admin.storages.egressBilling',
+  'admin.storages.capacityBilling',
+  'admin.storages.billingTitle',
+  'admin.storages.billingDescription',
+  'admin.storages.egressBillingHint',
+  'admin.storages.egressBillingBusinessOnly',
+  'admin.storages.egressBillingUnit',
+  'admin.storages.egressBillingUnitPlaceholder',
+  'admin.storages.egressBillingCredits',
+  'admin.storages.egressBillingCreditsPlaceholder',
+  'admin.storages.egressBillingRate',
+  'admin.storages.egressBillingOff',
+  'admin.storages.billingSaveSuccess',
 ]
 
 const ADMIN_NAV_KEYS = ['admin.nav.management', 'admin.nav.storages', 'admin.nav.users']
@@ -50,7 +127,19 @@ const ALL_KEYS = [...ADMIN_STORAGES_KEYS, ...ADMIN_NAV_KEYS, ...SHARED_KEYS]
 
 // Keys that contain interpolation placeholders and the expected placeholder tokens
 const INTERPOLATED_KEYS: Record<string, string[]> = {
-  'admin.storages.deleteConfirm': ['{{title}}'],
+  'admin.storages.deleteConfirm': ['{{bucket}}'],
+  'admin.storages.testUploadFailed': ['{{detail}}'],
+  'admin.storages.testCleanupFailed': ['{{detail}}'],
+  'admin.storages.billingDescription': ['{{bucket}}'],
+  'admin.storages.egressBillingRate': ['{{credits}}', '{{unit}}'],
+  'admin.storages.enableSuccess': ['{{bucket}}'],
+  'admin.storages.disableSuccess': ['{{bucket}}'],
+  'admin.storages.cardActions': ['{{bucket}}'],
+  'admin.storages.capacityAria': ['{{percent}}', '{{used}}'],
+  'admin.storages.lastChecked': ['{{value}}'],
+  'admin.storages.overview.enabled': ['{{count}}'],
+  'admin.storages.overview.bounded': ['{{count}}'],
+  'admin.storages.overview.usage': ['{{percent}}'],
 }
 
 describe('admin.storages locale keys — presence', () => {
@@ -128,20 +217,20 @@ describe('admin.storages locale keys — English values contract', () => {
     expect(enLocale['admin.storages.noStorages']).toBe('No storages configured')
   })
 
-  it('admin.storages.modePrivate is "Private"', () => {
-    expect(enLocale['admin.storages.modePrivate']).toBe('Private')
+  it('admin.storages.enableAction is "Enable and test"', () => {
+    expect(enLocale['admin.storages.enableAction']).toBe('Enable and test')
   })
 
-  it('admin.storages.modePublic is "Public"', () => {
-    expect(enLocale['admin.storages.modePublic']).toBe('Public')
+  it('admin.storages.cardStatus.healthy is "Running normally"', () => {
+    expect(enLocale['admin.storages.cardStatus.healthy']).toBe('Running normally')
   })
 
-  it('admin.storages.statusActive is "Active"', () => {
-    expect(enLocale['admin.storages.statusActive']).toBe('Active')
+  it('admin.storages.colHealth is "Connection health"', () => {
+    expect(enLocale['admin.storages.colHealth']).toBe('Connection health')
   })
 
-  it('admin.storages.statusInactive is "Inactive"', () => {
-    expect(enLocale['admin.storages.statusInactive']).toBe('Inactive')
+  it('admin.storages.testAction is "Test connection"', () => {
+    expect(enLocale['admin.storages.testAction']).toBe('Test connection')
   })
 
   it('admin.storages.deleteHasFiles is "Cannot delete storage that contains files."', () => {
@@ -180,12 +269,10 @@ describe('admin.storages locale keys — English values contract', () => {
     expect(enLocale['admin.storages.fieldCapacity']).toBe('Capacity')
   })
 
-  it('admin.storages.capacityUnlimited is "Unlimited"', () => {
-    expect(enLocale['admin.storages.capacityUnlimited']).toBe('Unlimited')
-  })
-
-  it('admin.storages.capacityHint is "Maximum storage space. 0 means unlimited."', () => {
-    expect(enLocale['admin.storages.capacityHint']).toBe('Maximum storage space. 0 means unlimited.')
+  it('admin.storages.capacityHint describes an unreported zero capacity', () => {
+    expect(enLocale['admin.storages.capacityHint']).toBe(
+      'Maximum reported storage space. 0 means capacity is not reported.',
+    )
   })
 })
 
@@ -214,34 +301,16 @@ describe('admin.storages locale keys — i18n runtime translation', () => {
     expect(i18n.t('admin.storages.add')).toBe('添加存储')
   })
 
-  it('translates admin.storages.modePrivate to English', async () => {
-    const { default: i18n } = await import('./index')
-    await i18n.changeLanguage('en')
-    expect(i18n.t('admin.storages.modePrivate')).toBe('Private')
-  })
-
-  it('translates admin.storages.modePrivate to Chinese', async () => {
+  it('translates admin.storages.enableAction to Chinese', async () => {
     const { default: i18n } = await import('./index')
     await i18n.changeLanguage('zh')
-    expect(i18n.t('admin.storages.modePrivate')).toBe('私有')
+    expect(i18n.t('admin.storages.enableAction')).toBe('启用并检查')
   })
 
-  it('translates admin.storages.modePublic to Chinese', async () => {
+  it('translates admin.storages.cardStatus.healthy to Chinese', async () => {
     const { default: i18n } = await import('./index')
     await i18n.changeLanguage('zh')
-    expect(i18n.t('admin.storages.modePublic')).toBe('公开')
-  })
-
-  it('translates admin.storages.statusActive to Chinese', async () => {
-    const { default: i18n } = await import('./index')
-    await i18n.changeLanguage('zh')
-    expect(i18n.t('admin.storages.statusActive')).toBe('正常')
-  })
-
-  it('translates admin.storages.statusInactive to Chinese', async () => {
-    const { default: i18n } = await import('./index')
-    await i18n.changeLanguage('zh')
-    expect(i18n.t('admin.storages.statusInactive')).toBe('未启用')
+    expect(i18n.t('admin.storages.cardStatus.healthy')).toBe('运行正常')
   })
 
   it('translates admin.storages.created to Chinese', async () => {
@@ -268,18 +337,18 @@ describe('admin.storages locale keys — i18n runtime translation', () => {
     expect(i18n.t('admin.storages.deleteTitle')).toBe('删除存储')
   })
 
-  it('interpolates admin.storages.deleteConfirm with title in English', async () => {
+  it('interpolates admin.storages.deleteConfirm with bucket in English', async () => {
     const { default: i18n } = await import('./index')
     await i18n.changeLanguage('en')
-    const result = i18n.t('admin.storages.deleteConfirm', { title: 'my-bucket' })
+    const result = i18n.t('admin.storages.deleteConfirm', { bucket: 'my-bucket' })
     expect(result).toContain('my-bucket')
     expect(result).toContain('cannot be undone')
   })
 
-  it('interpolates admin.storages.deleteConfirm with title in Chinese', async () => {
+  it('interpolates admin.storages.deleteConfirm with bucket in Chinese', async () => {
     const { default: i18n } = await import('./index')
     await i18n.changeLanguage('zh')
-    const result = i18n.t('admin.storages.deleteConfirm', { title: 'my-bucket' })
+    const result = i18n.t('admin.storages.deleteConfirm', { bucket: 'my-bucket' })
     expect(result).toContain('my-bucket')
   })
 
@@ -355,27 +424,17 @@ describe('admin.storages locale keys — i18n runtime translation', () => {
     expect(i18n.t('admin.storages.fieldCapacity')).toBe('可用空间')
   })
 
-  it('translates admin.storages.capacityUnlimited to English', async () => {
-    const { default: i18n } = await import('./index')
-    await i18n.changeLanguage('en')
-    expect(i18n.t('admin.storages.capacityUnlimited')).toBe('Unlimited')
-  })
-
-  it('translates admin.storages.capacityUnlimited to Chinese', async () => {
-    const { default: i18n } = await import('./index')
-    await i18n.changeLanguage('zh')
-    expect(i18n.t('admin.storages.capacityUnlimited')).toBe('不限制')
-  })
-
   it('translates admin.storages.capacityHint to English', async () => {
     const { default: i18n } = await import('./index')
     await i18n.changeLanguage('en')
-    expect(i18n.t('admin.storages.capacityHint')).toBe('Maximum storage space. 0 means unlimited.')
+    expect(i18n.t('admin.storages.capacityHint')).toBe(
+      'Maximum reported storage space. 0 means capacity is not reported.',
+    )
   })
 
   it('translates admin.storages.capacityHint to Chinese', async () => {
     const { default: i18n } = await import('./index')
     await i18n.changeLanguage('zh')
-    expect(i18n.t('admin.storages.capacityHint')).toBe('最大存储空间，0 表示不限制。')
+    expect(i18n.t('admin.storages.capacityHint')).toBe('存储后端报告的最大空间，0 表示未报告容量。')
   })
 })

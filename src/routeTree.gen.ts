@@ -10,20 +10,24 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as DeviceRouteImport } from './routes/device'
+import { Route as URouteRouteImport } from './routes/u/route'
 import { Route as SRouteRouteImport } from './routes/s/route'
+import { Route as OauthRouteRouteImport } from './routes/oauth/route'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as UUsernameRouteImport } from './routes/u/$username'
 import { Route as StoreCheckoutRouteImport } from './routes/store/checkout'
 import { Route as STokenRouteImport } from './routes/s/$token'
+import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
 import { Route as AuthenticatedStorageRouteImport } from './routes/_authenticated/storage'
 import { Route as authSignUpRouteImport } from './routes/(auth)/sign-up'
 import { Route as authSignInRouteImport } from './routes/(auth)/sign-in'
+import { Route as authResetPasswordRouteImport } from './routes/(auth)/reset-password'
+import { Route as authForgotPasswordRouteImport } from './routes/(auth)/forgot-password'
 import { Route as AuthenticatedSettingsRouteRouteImport } from './routes/_authenticated/settings/route'
 import { Route as AuthenticatedAdminRouteRouteImport } from './routes/_authenticated/admin/route'
 import { Route as AuthenticatedUsersIndexRouteImport } from './routes/_authenticated/users/index'
 import { Route as AuthenticatedTrashIndexRouteImport } from './routes/_authenticated/trash/index'
-import { Route as AuthenticatedTeamsIndexRouteImport } from './routes/_authenticated/teams/index'
 import { Route as AuthenticatedTasksIndexRouteImport } from './routes/_authenticated/tasks/index'
 import { Route as AuthenticatedStoragesIndexRouteImport } from './routes/_authenticated/storages/index'
 import { Route as AuthenticatedSharesIndexRouteImport } from './routes/_authenticated/shares/index'
@@ -36,22 +40,28 @@ import { Route as AuthenticatedTeamsInviteRouteImport } from './routes/_authenti
 import { Route as AuthenticatedSettingsWebdavRouteImport } from './routes/_authenticated/settings/webdav'
 import { Route as AuthenticatedSettingsProfileRouteImport } from './routes/_authenticated/settings/profile'
 import { Route as AuthenticatedSettingsPasswordRouteImport } from './routes/_authenticated/settings/password'
-import { Route as AuthenticatedSettingsIhostRouteImport } from './routes/_authenticated/settings/ihost'
+import { Route as AuthenticatedSettingsOauthAppsRouteImport } from './routes/_authenticated/settings/oauth-apps'
 import { Route as AuthenticatedSettingsApiKeysRouteImport } from './routes/_authenticated/settings/api-keys'
 import { Route as AuthenticatedAdminLicensingRouteImport } from './routes/_authenticated/admin/licensing'
 import { Route as AuthenticatedAdminDownloadersRouteImport } from './routes/_authenticated/admin/downloaders'
+import { Route as AuthenticatedAdminDashboardRouteImport } from './routes/_authenticated/admin/dashboard'
 import { Route as AuthenticatedAdminAuditRouteImport } from './routes/_authenticated/admin/audit'
 import { Route as AuthenticatedAdminAnnouncementRouteImport } from './routes/_authenticated/admin/announcement'
+import { Route as AuthenticatedAdminAnalyticsRouteImport } from './routes/_authenticated/admin/analytics'
 import { Route as AuthenticatedAdminAboutRouteImport } from './routes/_authenticated/admin/about'
 import { Route as AuthenticatedTeamsTeamIdRouteRouteImport } from './routes/_authenticated/teams/$teamId/route'
 import { Route as AuthenticatedTeamsTeamIdIndexRouteImport } from './routes/_authenticated/teams/$teamId/index'
 import { Route as AuthenticatedAdminUsersIndexRouteImport } from './routes/_authenticated/admin/users/index'
+import { Route as AuthenticatedAdminTeamsIndexRouteImport } from './routes/_authenticated/admin/teams/index'
 import { Route as AuthenticatedAdminStoragesIndexRouteImport } from './routes/_authenticated/admin/storages/index'
 import { Route as AuthenticatedAdminSettingsIndexRouteImport } from './routes/_authenticated/admin/settings/index'
 import { Route as AuthenticatedTeamsTeamIdSettingsRouteImport } from './routes/_authenticated/teams/$teamId/settings'
 import { Route as AuthenticatedTeamsTeamIdMembersRouteImport } from './routes/_authenticated/teams/$teamId/members'
+import { Route as AuthenticatedTeamsTeamIdIhostRouteImport } from './routes/_authenticated/teams/$teamId/ihost'
+import { Route as AuthenticatedTeamsTeamIdBillingRouteImport } from './routes/_authenticated/teams/$teamId/billing'
 import { Route as AuthenticatedTeamsTeamIdActivityRouteImport } from './routes/_authenticated/teams/$teamId/activity'
 import { Route as AuthenticatedAdminUsersUserIdRouteImport } from './routes/_authenticated/admin/users/$userId'
+import { Route as AuthenticatedAdminTeamsOrgIdRouteImport } from './routes/_authenticated/admin/teams/$orgId'
 import { Route as AuthenticatedAdminSettingsOauthRouteImport } from './routes/_authenticated/admin/settings/oauth'
 import { Route as AuthenticatedAdminSettingsEmailRouteImport } from './routes/_authenticated/admin/settings/email'
 
@@ -60,9 +70,19 @@ const DeviceRoute = DeviceRouteImport.update({
   path: '/device',
   getParentRoute: () => rootRouteImport,
 } as any)
+const URouteRoute = URouteRouteImport.update({
+  id: '/u',
+  path: '/u',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SRouteRoute = SRouteRouteImport.update({
   id: '/s',
   path: '/s',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OauthRouteRoute = OauthRouteRouteImport.update({
+  id: '/oauth',
+  path: '/oauth',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
@@ -75,9 +95,9 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const UUsernameRoute = UUsernameRouteImport.update({
-  id: '/u/$username',
-  path: '/u/$username',
-  getParentRoute: () => rootRouteImport,
+  id: '/$username',
+  path: '/$username',
+  getParentRoute: () => URouteRoute,
 } as any)
 const StoreCheckoutRoute = StoreCheckoutRouteImport.update({
   id: '/store/checkout',
@@ -88,6 +108,11 @@ const STokenRoute = STokenRouteImport.update({
   id: '/$token',
   path: '/$token',
   getParentRoute: () => SRouteRoute,
+} as any)
+const OauthConsentRoute = OauthConsentRouteImport.update({
+  id: '/consent',
+  path: '/consent',
+  getParentRoute: () => OauthRouteRoute,
 } as any)
 const AuthenticatedStorageRoute = AuthenticatedStorageRouteImport.update({
   id: '/storage',
@@ -102,6 +127,16 @@ const authSignUpRoute = authSignUpRouteImport.update({
 const authSignInRoute = authSignInRouteImport.update({
   id: '/(auth)/sign-in',
   path: '/sign-in',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const authResetPasswordRoute = authResetPasswordRouteImport.update({
+  id: '/(auth)/reset-password',
+  path: '/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const authForgotPasswordRoute = authForgotPasswordRouteImport.update({
+  id: '/(auth)/forgot-password',
+  path: '/forgot-password',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthenticatedSettingsRouteRoute =
@@ -123,11 +158,6 @@ const AuthenticatedUsersIndexRoute = AuthenticatedUsersIndexRouteImport.update({
 const AuthenticatedTrashIndexRoute = AuthenticatedTrashIndexRouteImport.update({
   id: '/trash/',
   path: '/trash/',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
-const AuthenticatedTeamsIndexRoute = AuthenticatedTeamsIndexRouteImport.update({
-  id: '/teams/',
-  path: '/teams/',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedTasksIndexRoute = AuthenticatedTasksIndexRouteImport.update({
@@ -199,10 +229,10 @@ const AuthenticatedSettingsPasswordRoute =
     path: '/password',
     getParentRoute: () => AuthenticatedSettingsRouteRoute,
   } as any)
-const AuthenticatedSettingsIhostRoute =
-  AuthenticatedSettingsIhostRouteImport.update({
-    id: '/ihost',
-    path: '/ihost',
+const AuthenticatedSettingsOauthAppsRoute =
+  AuthenticatedSettingsOauthAppsRouteImport.update({
+    id: '/oauth-apps',
+    path: '/oauth-apps',
     getParentRoute: () => AuthenticatedSettingsRouteRoute,
   } as any)
 const AuthenticatedSettingsApiKeysRoute =
@@ -223,6 +253,12 @@ const AuthenticatedAdminDownloadersRoute =
     path: '/downloaders',
     getParentRoute: () => AuthenticatedAdminRouteRoute,
   } as any)
+const AuthenticatedAdminDashboardRoute =
+  AuthenticatedAdminDashboardRouteImport.update({
+    id: '/dashboard',
+    path: '/dashboard',
+    getParentRoute: () => AuthenticatedAdminRouteRoute,
+  } as any)
 const AuthenticatedAdminAuditRoute = AuthenticatedAdminAuditRouteImport.update({
   id: '/audit',
   path: '/audit',
@@ -232,6 +268,12 @@ const AuthenticatedAdminAnnouncementRoute =
   AuthenticatedAdminAnnouncementRouteImport.update({
     id: '/announcement',
     path: '/announcement',
+    getParentRoute: () => AuthenticatedAdminRouteRoute,
+  } as any)
+const AuthenticatedAdminAnalyticsRoute =
+  AuthenticatedAdminAnalyticsRouteImport.update({
+    id: '/analytics',
+    path: '/analytics',
     getParentRoute: () => AuthenticatedAdminRouteRoute,
   } as any)
 const AuthenticatedAdminAboutRoute = AuthenticatedAdminAboutRouteImport.update({
@@ -255,6 +297,12 @@ const AuthenticatedAdminUsersIndexRoute =
   AuthenticatedAdminUsersIndexRouteImport.update({
     id: '/users/',
     path: '/users/',
+    getParentRoute: () => AuthenticatedAdminRouteRoute,
+  } as any)
+const AuthenticatedAdminTeamsIndexRoute =
+  AuthenticatedAdminTeamsIndexRouteImport.update({
+    id: '/teams/',
+    path: '/teams/',
     getParentRoute: () => AuthenticatedAdminRouteRoute,
   } as any)
 const AuthenticatedAdminStoragesIndexRoute =
@@ -281,6 +329,18 @@ const AuthenticatedTeamsTeamIdMembersRoute =
     path: '/members',
     getParentRoute: () => AuthenticatedTeamsTeamIdRouteRoute,
   } as any)
+const AuthenticatedTeamsTeamIdIhostRoute =
+  AuthenticatedTeamsTeamIdIhostRouteImport.update({
+    id: '/ihost',
+    path: '/ihost',
+    getParentRoute: () => AuthenticatedTeamsTeamIdRouteRoute,
+  } as any)
+const AuthenticatedTeamsTeamIdBillingRoute =
+  AuthenticatedTeamsTeamIdBillingRouteImport.update({
+    id: '/billing',
+    path: '/billing',
+    getParentRoute: () => AuthenticatedTeamsTeamIdRouteRoute,
+  } as any)
 const AuthenticatedTeamsTeamIdActivityRoute =
   AuthenticatedTeamsTeamIdActivityRouteImport.update({
     id: '/activity',
@@ -291,6 +351,12 @@ const AuthenticatedAdminUsersUserIdRoute =
   AuthenticatedAdminUsersUserIdRouteImport.update({
     id: '/users/$userId',
     path: '/users/$userId',
+    getParentRoute: () => AuthenticatedAdminRouteRoute,
+  } as any)
+const AuthenticatedAdminTeamsOrgIdRoute =
+  AuthenticatedAdminTeamsOrgIdRouteImport.update({
+    id: '/teams/$orgId',
+    path: '/teams/$orgId',
     getParentRoute: () => AuthenticatedAdminRouteRoute,
   } as any)
 const AuthenticatedAdminSettingsOauthRoute =
@@ -308,24 +374,31 @@ const AuthenticatedAdminSettingsEmailRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
+  '/oauth': typeof OauthRouteRouteWithChildren
   '/s': typeof SRouteRouteWithChildren
+  '/u': typeof URouteRouteWithChildren
   '/device': typeof DeviceRoute
   '/admin': typeof AuthenticatedAdminRouteRouteWithChildren
   '/settings': typeof AuthenticatedSettingsRouteRouteWithChildren
+  '/forgot-password': typeof authForgotPasswordRoute
+  '/reset-password': typeof authResetPasswordRoute
   '/sign-in': typeof authSignInRoute
   '/sign-up': typeof authSignUpRoute
   '/storage': typeof AuthenticatedStorageRoute
+  '/oauth/consent': typeof OauthConsentRoute
   '/s/$token': typeof STokenRoute
   '/store/checkout': typeof StoreCheckoutRoute
   '/u/$username': typeof UUsernameRoute
   '/teams/$teamId': typeof AuthenticatedTeamsTeamIdRouteRouteWithChildren
   '/admin/about': typeof AuthenticatedAdminAboutRoute
+  '/admin/analytics': typeof AuthenticatedAdminAnalyticsRoute
   '/admin/announcement': typeof AuthenticatedAdminAnnouncementRoute
   '/admin/audit': typeof AuthenticatedAdminAuditRoute
+  '/admin/dashboard': typeof AuthenticatedAdminDashboardRoute
   '/admin/downloaders': typeof AuthenticatedAdminDownloadersRoute
   '/admin/licensing': typeof AuthenticatedAdminLicensingRoute
   '/settings/api-keys': typeof AuthenticatedSettingsApiKeysRoute
-  '/settings/ihost': typeof AuthenticatedSettingsIhostRoute
+  '/settings/oauth-apps': typeof AuthenticatedSettingsOauthAppsRoute
   '/settings/password': typeof AuthenticatedSettingsPasswordRoute
   '/settings/profile': typeof AuthenticatedSettingsProfileRoute
   '/settings/webdav': typeof AuthenticatedSettingsWebdavRoute
@@ -338,37 +411,47 @@ export interface FileRoutesByFullPath {
   '/shares/': typeof AuthenticatedSharesIndexRoute
   '/storages/': typeof AuthenticatedStoragesIndexRoute
   '/tasks/': typeof AuthenticatedTasksIndexRoute
-  '/teams/': typeof AuthenticatedTeamsIndexRoute
   '/trash/': typeof AuthenticatedTrashIndexRoute
   '/users/': typeof AuthenticatedUsersIndexRoute
   '/admin/settings/email': typeof AuthenticatedAdminSettingsEmailRoute
   '/admin/settings/oauth': typeof AuthenticatedAdminSettingsOauthRoute
+  '/admin/teams/$orgId': typeof AuthenticatedAdminTeamsOrgIdRoute
   '/admin/users/$userId': typeof AuthenticatedAdminUsersUserIdRoute
   '/teams/$teamId/activity': typeof AuthenticatedTeamsTeamIdActivityRoute
+  '/teams/$teamId/billing': typeof AuthenticatedTeamsTeamIdBillingRoute
+  '/teams/$teamId/ihost': typeof AuthenticatedTeamsTeamIdIhostRoute
   '/teams/$teamId/members': typeof AuthenticatedTeamsTeamIdMembersRoute
   '/teams/$teamId/settings': typeof AuthenticatedTeamsTeamIdSettingsRoute
   '/admin/settings/': typeof AuthenticatedAdminSettingsIndexRoute
   '/admin/storages/': typeof AuthenticatedAdminStoragesIndexRoute
+  '/admin/teams/': typeof AuthenticatedAdminTeamsIndexRoute
   '/admin/users/': typeof AuthenticatedAdminUsersIndexRoute
   '/teams/$teamId/': typeof AuthenticatedTeamsTeamIdIndexRoute
 }
 export interface FileRoutesByTo {
+  '/oauth': typeof OauthRouteRouteWithChildren
   '/s': typeof SRouteRouteWithChildren
+  '/u': typeof URouteRouteWithChildren
   '/device': typeof DeviceRoute
+  '/forgot-password': typeof authForgotPasswordRoute
+  '/reset-password': typeof authResetPasswordRoute
   '/sign-in': typeof authSignInRoute
   '/sign-up': typeof authSignUpRoute
   '/storage': typeof AuthenticatedStorageRoute
+  '/oauth/consent': typeof OauthConsentRoute
   '/s/$token': typeof STokenRoute
   '/store/checkout': typeof StoreCheckoutRoute
   '/u/$username': typeof UUsernameRoute
   '/': typeof AuthenticatedIndexRoute
   '/admin/about': typeof AuthenticatedAdminAboutRoute
+  '/admin/analytics': typeof AuthenticatedAdminAnalyticsRoute
   '/admin/announcement': typeof AuthenticatedAdminAnnouncementRoute
   '/admin/audit': typeof AuthenticatedAdminAuditRoute
+  '/admin/dashboard': typeof AuthenticatedAdminDashboardRoute
   '/admin/downloaders': typeof AuthenticatedAdminDownloadersRoute
   '/admin/licensing': typeof AuthenticatedAdminLicensingRoute
   '/settings/api-keys': typeof AuthenticatedSettingsApiKeysRoute
-  '/settings/ihost': typeof AuthenticatedSettingsIhostRoute
+  '/settings/oauth-apps': typeof AuthenticatedSettingsOauthAppsRoute
   '/settings/password': typeof AuthenticatedSettingsPasswordRoute
   '/settings/profile': typeof AuthenticatedSettingsProfileRoute
   '/settings/webdav': typeof AuthenticatedSettingsWebdavRoute
@@ -381,42 +464,52 @@ export interface FileRoutesByTo {
   '/shares': typeof AuthenticatedSharesIndexRoute
   '/storages': typeof AuthenticatedStoragesIndexRoute
   '/tasks': typeof AuthenticatedTasksIndexRoute
-  '/teams': typeof AuthenticatedTeamsIndexRoute
   '/trash': typeof AuthenticatedTrashIndexRoute
   '/users': typeof AuthenticatedUsersIndexRoute
   '/admin/settings/email': typeof AuthenticatedAdminSettingsEmailRoute
   '/admin/settings/oauth': typeof AuthenticatedAdminSettingsOauthRoute
+  '/admin/teams/$orgId': typeof AuthenticatedAdminTeamsOrgIdRoute
   '/admin/users/$userId': typeof AuthenticatedAdminUsersUserIdRoute
   '/teams/$teamId/activity': typeof AuthenticatedTeamsTeamIdActivityRoute
+  '/teams/$teamId/billing': typeof AuthenticatedTeamsTeamIdBillingRoute
+  '/teams/$teamId/ihost': typeof AuthenticatedTeamsTeamIdIhostRoute
   '/teams/$teamId/members': typeof AuthenticatedTeamsTeamIdMembersRoute
   '/teams/$teamId/settings': typeof AuthenticatedTeamsTeamIdSettingsRoute
   '/admin/settings': typeof AuthenticatedAdminSettingsIndexRoute
   '/admin/storages': typeof AuthenticatedAdminStoragesIndexRoute
+  '/admin/teams': typeof AuthenticatedAdminTeamsIndexRoute
   '/admin/users': typeof AuthenticatedAdminUsersIndexRoute
   '/teams/$teamId': typeof AuthenticatedTeamsTeamIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
+  '/oauth': typeof OauthRouteRouteWithChildren
   '/s': typeof SRouteRouteWithChildren
+  '/u': typeof URouteRouteWithChildren
   '/device': typeof DeviceRoute
   '/_authenticated/admin': typeof AuthenticatedAdminRouteRouteWithChildren
   '/_authenticated/settings': typeof AuthenticatedSettingsRouteRouteWithChildren
+  '/(auth)/forgot-password': typeof authForgotPasswordRoute
+  '/(auth)/reset-password': typeof authResetPasswordRoute
   '/(auth)/sign-in': typeof authSignInRoute
   '/(auth)/sign-up': typeof authSignUpRoute
   '/_authenticated/storage': typeof AuthenticatedStorageRoute
+  '/oauth/consent': typeof OauthConsentRoute
   '/s/$token': typeof STokenRoute
   '/store/checkout': typeof StoreCheckoutRoute
   '/u/$username': typeof UUsernameRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/teams/$teamId': typeof AuthenticatedTeamsTeamIdRouteRouteWithChildren
   '/_authenticated/admin/about': typeof AuthenticatedAdminAboutRoute
+  '/_authenticated/admin/analytics': typeof AuthenticatedAdminAnalyticsRoute
   '/_authenticated/admin/announcement': typeof AuthenticatedAdminAnnouncementRoute
   '/_authenticated/admin/audit': typeof AuthenticatedAdminAuditRoute
+  '/_authenticated/admin/dashboard': typeof AuthenticatedAdminDashboardRoute
   '/_authenticated/admin/downloaders': typeof AuthenticatedAdminDownloadersRoute
   '/_authenticated/admin/licensing': typeof AuthenticatedAdminLicensingRoute
   '/_authenticated/settings/api-keys': typeof AuthenticatedSettingsApiKeysRoute
-  '/_authenticated/settings/ihost': typeof AuthenticatedSettingsIhostRoute
+  '/_authenticated/settings/oauth-apps': typeof AuthenticatedSettingsOauthAppsRoute
   '/_authenticated/settings/password': typeof AuthenticatedSettingsPasswordRoute
   '/_authenticated/settings/profile': typeof AuthenticatedSettingsProfileRoute
   '/_authenticated/settings/webdav': typeof AuthenticatedSettingsWebdavRoute
@@ -429,17 +522,20 @@ export interface FileRoutesById {
   '/_authenticated/shares/': typeof AuthenticatedSharesIndexRoute
   '/_authenticated/storages/': typeof AuthenticatedStoragesIndexRoute
   '/_authenticated/tasks/': typeof AuthenticatedTasksIndexRoute
-  '/_authenticated/teams/': typeof AuthenticatedTeamsIndexRoute
   '/_authenticated/trash/': typeof AuthenticatedTrashIndexRoute
   '/_authenticated/users/': typeof AuthenticatedUsersIndexRoute
   '/_authenticated/admin/settings/email': typeof AuthenticatedAdminSettingsEmailRoute
   '/_authenticated/admin/settings/oauth': typeof AuthenticatedAdminSettingsOauthRoute
+  '/_authenticated/admin/teams/$orgId': typeof AuthenticatedAdminTeamsOrgIdRoute
   '/_authenticated/admin/users/$userId': typeof AuthenticatedAdminUsersUserIdRoute
   '/_authenticated/teams/$teamId/activity': typeof AuthenticatedTeamsTeamIdActivityRoute
+  '/_authenticated/teams/$teamId/billing': typeof AuthenticatedTeamsTeamIdBillingRoute
+  '/_authenticated/teams/$teamId/ihost': typeof AuthenticatedTeamsTeamIdIhostRoute
   '/_authenticated/teams/$teamId/members': typeof AuthenticatedTeamsTeamIdMembersRoute
   '/_authenticated/teams/$teamId/settings': typeof AuthenticatedTeamsTeamIdSettingsRoute
   '/_authenticated/admin/settings/': typeof AuthenticatedAdminSettingsIndexRoute
   '/_authenticated/admin/storages/': typeof AuthenticatedAdminStoragesIndexRoute
+  '/_authenticated/admin/teams/': typeof AuthenticatedAdminTeamsIndexRoute
   '/_authenticated/admin/users/': typeof AuthenticatedAdminUsersIndexRoute
   '/_authenticated/teams/$teamId/': typeof AuthenticatedTeamsTeamIdIndexRoute
 }
@@ -447,24 +543,31 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/oauth'
     | '/s'
+    | '/u'
     | '/device'
     | '/admin'
     | '/settings'
+    | '/forgot-password'
+    | '/reset-password'
     | '/sign-in'
     | '/sign-up'
     | '/storage'
+    | '/oauth/consent'
     | '/s/$token'
     | '/store/checkout'
     | '/u/$username'
     | '/teams/$teamId'
     | '/admin/about'
+    | '/admin/analytics'
     | '/admin/announcement'
     | '/admin/audit'
+    | '/admin/dashboard'
     | '/admin/downloaders'
     | '/admin/licensing'
     | '/settings/api-keys'
-    | '/settings/ihost'
+    | '/settings/oauth-apps'
     | '/settings/password'
     | '/settings/profile'
     | '/settings/webdav'
@@ -477,37 +580,47 @@ export interface FileRouteTypes {
     | '/shares/'
     | '/storages/'
     | '/tasks/'
-    | '/teams/'
     | '/trash/'
     | '/users/'
     | '/admin/settings/email'
     | '/admin/settings/oauth'
+    | '/admin/teams/$orgId'
     | '/admin/users/$userId'
     | '/teams/$teamId/activity'
+    | '/teams/$teamId/billing'
+    | '/teams/$teamId/ihost'
     | '/teams/$teamId/members'
     | '/teams/$teamId/settings'
     | '/admin/settings/'
     | '/admin/storages/'
+    | '/admin/teams/'
     | '/admin/users/'
     | '/teams/$teamId/'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/oauth'
     | '/s'
+    | '/u'
     | '/device'
+    | '/forgot-password'
+    | '/reset-password'
     | '/sign-in'
     | '/sign-up'
     | '/storage'
+    | '/oauth/consent'
     | '/s/$token'
     | '/store/checkout'
     | '/u/$username'
     | '/'
     | '/admin/about'
+    | '/admin/analytics'
     | '/admin/announcement'
     | '/admin/audit'
+    | '/admin/dashboard'
     | '/admin/downloaders'
     | '/admin/licensing'
     | '/settings/api-keys'
-    | '/settings/ihost'
+    | '/settings/oauth-apps'
     | '/settings/password'
     | '/settings/profile'
     | '/settings/webdav'
@@ -520,41 +633,51 @@ export interface FileRouteTypes {
     | '/shares'
     | '/storages'
     | '/tasks'
-    | '/teams'
     | '/trash'
     | '/users'
     | '/admin/settings/email'
     | '/admin/settings/oauth'
+    | '/admin/teams/$orgId'
     | '/admin/users/$userId'
     | '/teams/$teamId/activity'
+    | '/teams/$teamId/billing'
+    | '/teams/$teamId/ihost'
     | '/teams/$teamId/members'
     | '/teams/$teamId/settings'
     | '/admin/settings'
     | '/admin/storages'
+    | '/admin/teams'
     | '/admin/users'
     | '/teams/$teamId'
   id:
     | '__root__'
     | '/_authenticated'
+    | '/oauth'
     | '/s'
+    | '/u'
     | '/device'
     | '/_authenticated/admin'
     | '/_authenticated/settings'
+    | '/(auth)/forgot-password'
+    | '/(auth)/reset-password'
     | '/(auth)/sign-in'
     | '/(auth)/sign-up'
     | '/_authenticated/storage'
+    | '/oauth/consent'
     | '/s/$token'
     | '/store/checkout'
     | '/u/$username'
     | '/_authenticated/'
     | '/_authenticated/teams/$teamId'
     | '/_authenticated/admin/about'
+    | '/_authenticated/admin/analytics'
     | '/_authenticated/admin/announcement'
     | '/_authenticated/admin/audit'
+    | '/_authenticated/admin/dashboard'
     | '/_authenticated/admin/downloaders'
     | '/_authenticated/admin/licensing'
     | '/_authenticated/settings/api-keys'
-    | '/_authenticated/settings/ihost'
+    | '/_authenticated/settings/oauth-apps'
     | '/_authenticated/settings/password'
     | '/_authenticated/settings/profile'
     | '/_authenticated/settings/webdav'
@@ -567,29 +690,35 @@ export interface FileRouteTypes {
     | '/_authenticated/shares/'
     | '/_authenticated/storages/'
     | '/_authenticated/tasks/'
-    | '/_authenticated/teams/'
     | '/_authenticated/trash/'
     | '/_authenticated/users/'
     | '/_authenticated/admin/settings/email'
     | '/_authenticated/admin/settings/oauth'
+    | '/_authenticated/admin/teams/$orgId'
     | '/_authenticated/admin/users/$userId'
     | '/_authenticated/teams/$teamId/activity'
+    | '/_authenticated/teams/$teamId/billing'
+    | '/_authenticated/teams/$teamId/ihost'
     | '/_authenticated/teams/$teamId/members'
     | '/_authenticated/teams/$teamId/settings'
     | '/_authenticated/admin/settings/'
     | '/_authenticated/admin/storages/'
+    | '/_authenticated/admin/teams/'
     | '/_authenticated/admin/users/'
     | '/_authenticated/teams/$teamId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
+  OauthRouteRoute: typeof OauthRouteRouteWithChildren
   SRouteRoute: typeof SRouteRouteWithChildren
+  URouteRoute: typeof URouteRouteWithChildren
   DeviceRoute: typeof DeviceRoute
+  authForgotPasswordRoute: typeof authForgotPasswordRoute
+  authResetPasswordRoute: typeof authResetPasswordRoute
   authSignInRoute: typeof authSignInRoute
   authSignUpRoute: typeof authSignUpRoute
   StoreCheckoutRoute: typeof StoreCheckoutRoute
-  UUsernameRoute: typeof UUsernameRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -601,11 +730,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DeviceRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/u': {
+      id: '/u'
+      path: '/u'
+      fullPath: '/u'
+      preLoaderRoute: typeof URouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/s': {
       id: '/s'
       path: '/s'
       fullPath: '/s'
       preLoaderRoute: typeof SRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oauth': {
+      id: '/oauth'
+      path: '/oauth'
+      fullPath: '/oauth'
+      preLoaderRoute: typeof OauthRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated': {
@@ -624,10 +767,10 @@ declare module '@tanstack/react-router' {
     }
     '/u/$username': {
       id: '/u/$username'
-      path: '/u/$username'
+      path: '/$username'
       fullPath: '/u/$username'
       preLoaderRoute: typeof UUsernameRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof URouteRoute
     }
     '/store/checkout': {
       id: '/store/checkout'
@@ -642,6 +785,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/s/$token'
       preLoaderRoute: typeof STokenRouteImport
       parentRoute: typeof SRouteRoute
+    }
+    '/oauth/consent': {
+      id: '/oauth/consent'
+      path: '/consent'
+      fullPath: '/oauth/consent'
+      preLoaderRoute: typeof OauthConsentRouteImport
+      parentRoute: typeof OauthRouteRoute
     }
     '/_authenticated/storage': {
       id: '/_authenticated/storage'
@@ -662,6 +812,20 @@ declare module '@tanstack/react-router' {
       path: '/sign-in'
       fullPath: '/sign-in'
       preLoaderRoute: typeof authSignInRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(auth)/reset-password': {
+      id: '/(auth)/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof authResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(auth)/forgot-password': {
+      id: '/(auth)/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof authForgotPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated/settings': {
@@ -690,13 +854,6 @@ declare module '@tanstack/react-router' {
       path: '/trash'
       fullPath: '/trash/'
       preLoaderRoute: typeof AuthenticatedTrashIndexRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/teams/': {
-      id: '/_authenticated/teams/'
-      path: '/teams'
-      fullPath: '/teams/'
-      preLoaderRoute: typeof AuthenticatedTeamsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/tasks/': {
@@ -783,11 +940,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsPasswordRouteImport
       parentRoute: typeof AuthenticatedSettingsRouteRoute
     }
-    '/_authenticated/settings/ihost': {
-      id: '/_authenticated/settings/ihost'
-      path: '/ihost'
-      fullPath: '/settings/ihost'
-      preLoaderRoute: typeof AuthenticatedSettingsIhostRouteImport
+    '/_authenticated/settings/oauth-apps': {
+      id: '/_authenticated/settings/oauth-apps'
+      path: '/oauth-apps'
+      fullPath: '/settings/oauth-apps'
+      preLoaderRoute: typeof AuthenticatedSettingsOauthAppsRouteImport
       parentRoute: typeof AuthenticatedSettingsRouteRoute
     }
     '/_authenticated/settings/api-keys': {
@@ -811,6 +968,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAdminDownloadersRouteImport
       parentRoute: typeof AuthenticatedAdminRouteRoute
     }
+    '/_authenticated/admin/dashboard': {
+      id: '/_authenticated/admin/dashboard'
+      path: '/dashboard'
+      fullPath: '/admin/dashboard'
+      preLoaderRoute: typeof AuthenticatedAdminDashboardRouteImport
+      parentRoute: typeof AuthenticatedAdminRouteRoute
+    }
     '/_authenticated/admin/audit': {
       id: '/_authenticated/admin/audit'
       path: '/audit'
@@ -823,6 +987,13 @@ declare module '@tanstack/react-router' {
       path: '/announcement'
       fullPath: '/admin/announcement'
       preLoaderRoute: typeof AuthenticatedAdminAnnouncementRouteImport
+      parentRoute: typeof AuthenticatedAdminRouteRoute
+    }
+    '/_authenticated/admin/analytics': {
+      id: '/_authenticated/admin/analytics'
+      path: '/analytics'
+      fullPath: '/admin/analytics'
+      preLoaderRoute: typeof AuthenticatedAdminAnalyticsRouteImport
       parentRoute: typeof AuthenticatedAdminRouteRoute
     }
     '/_authenticated/admin/about': {
@@ -853,6 +1024,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAdminUsersIndexRouteImport
       parentRoute: typeof AuthenticatedAdminRouteRoute
     }
+    '/_authenticated/admin/teams/': {
+      id: '/_authenticated/admin/teams/'
+      path: '/teams'
+      fullPath: '/admin/teams/'
+      preLoaderRoute: typeof AuthenticatedAdminTeamsIndexRouteImport
+      parentRoute: typeof AuthenticatedAdminRouteRoute
+    }
     '/_authenticated/admin/storages/': {
       id: '/_authenticated/admin/storages/'
       path: '/storages'
@@ -881,6 +1059,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedTeamsTeamIdMembersRouteImport
       parentRoute: typeof AuthenticatedTeamsTeamIdRouteRoute
     }
+    '/_authenticated/teams/$teamId/ihost': {
+      id: '/_authenticated/teams/$teamId/ihost'
+      path: '/ihost'
+      fullPath: '/teams/$teamId/ihost'
+      preLoaderRoute: typeof AuthenticatedTeamsTeamIdIhostRouteImport
+      parentRoute: typeof AuthenticatedTeamsTeamIdRouteRoute
+    }
+    '/_authenticated/teams/$teamId/billing': {
+      id: '/_authenticated/teams/$teamId/billing'
+      path: '/billing'
+      fullPath: '/teams/$teamId/billing'
+      preLoaderRoute: typeof AuthenticatedTeamsTeamIdBillingRouteImport
+      parentRoute: typeof AuthenticatedTeamsTeamIdRouteRoute
+    }
     '/_authenticated/teams/$teamId/activity': {
       id: '/_authenticated/teams/$teamId/activity'
       path: '/activity'
@@ -893,6 +1085,13 @@ declare module '@tanstack/react-router' {
       path: '/users/$userId'
       fullPath: '/admin/users/$userId'
       preLoaderRoute: typeof AuthenticatedAdminUsersUserIdRouteImport
+      parentRoute: typeof AuthenticatedAdminRouteRoute
+    }
+    '/_authenticated/admin/teams/$orgId': {
+      id: '/_authenticated/admin/teams/$orgId'
+      path: '/teams/$orgId'
+      fullPath: '/admin/teams/$orgId'
+      preLoaderRoute: typeof AuthenticatedAdminTeamsOrgIdRouteImport
       parentRoute: typeof AuthenticatedAdminRouteRoute
     }
     '/_authenticated/admin/settings/oauth': {
@@ -914,32 +1113,40 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedAdminRouteRouteChildren {
   AuthenticatedAdminAboutRoute: typeof AuthenticatedAdminAboutRoute
+  AuthenticatedAdminAnalyticsRoute: typeof AuthenticatedAdminAnalyticsRoute
   AuthenticatedAdminAnnouncementRoute: typeof AuthenticatedAdminAnnouncementRoute
   AuthenticatedAdminAuditRoute: typeof AuthenticatedAdminAuditRoute
+  AuthenticatedAdminDashboardRoute: typeof AuthenticatedAdminDashboardRoute
   AuthenticatedAdminDownloadersRoute: typeof AuthenticatedAdminDownloadersRoute
   AuthenticatedAdminLicensingRoute: typeof AuthenticatedAdminLicensingRoute
   AuthenticatedAdminIndexRoute: typeof AuthenticatedAdminIndexRoute
   AuthenticatedAdminSettingsEmailRoute: typeof AuthenticatedAdminSettingsEmailRoute
   AuthenticatedAdminSettingsOauthRoute: typeof AuthenticatedAdminSettingsOauthRoute
+  AuthenticatedAdminTeamsOrgIdRoute: typeof AuthenticatedAdminTeamsOrgIdRoute
   AuthenticatedAdminUsersUserIdRoute: typeof AuthenticatedAdminUsersUserIdRoute
   AuthenticatedAdminSettingsIndexRoute: typeof AuthenticatedAdminSettingsIndexRoute
   AuthenticatedAdminStoragesIndexRoute: typeof AuthenticatedAdminStoragesIndexRoute
+  AuthenticatedAdminTeamsIndexRoute: typeof AuthenticatedAdminTeamsIndexRoute
   AuthenticatedAdminUsersIndexRoute: typeof AuthenticatedAdminUsersIndexRoute
 }
 
 const AuthenticatedAdminRouteRouteChildren: AuthenticatedAdminRouteRouteChildren =
   {
     AuthenticatedAdminAboutRoute: AuthenticatedAdminAboutRoute,
+    AuthenticatedAdminAnalyticsRoute: AuthenticatedAdminAnalyticsRoute,
     AuthenticatedAdminAnnouncementRoute: AuthenticatedAdminAnnouncementRoute,
     AuthenticatedAdminAuditRoute: AuthenticatedAdminAuditRoute,
+    AuthenticatedAdminDashboardRoute: AuthenticatedAdminDashboardRoute,
     AuthenticatedAdminDownloadersRoute: AuthenticatedAdminDownloadersRoute,
     AuthenticatedAdminLicensingRoute: AuthenticatedAdminLicensingRoute,
     AuthenticatedAdminIndexRoute: AuthenticatedAdminIndexRoute,
     AuthenticatedAdminSettingsEmailRoute: AuthenticatedAdminSettingsEmailRoute,
     AuthenticatedAdminSettingsOauthRoute: AuthenticatedAdminSettingsOauthRoute,
+    AuthenticatedAdminTeamsOrgIdRoute: AuthenticatedAdminTeamsOrgIdRoute,
     AuthenticatedAdminUsersUserIdRoute: AuthenticatedAdminUsersUserIdRoute,
     AuthenticatedAdminSettingsIndexRoute: AuthenticatedAdminSettingsIndexRoute,
     AuthenticatedAdminStoragesIndexRoute: AuthenticatedAdminStoragesIndexRoute,
+    AuthenticatedAdminTeamsIndexRoute: AuthenticatedAdminTeamsIndexRoute,
     AuthenticatedAdminUsersIndexRoute: AuthenticatedAdminUsersIndexRoute,
   }
 
@@ -950,7 +1157,7 @@ const AuthenticatedAdminRouteRouteWithChildren =
 
 interface AuthenticatedSettingsRouteRouteChildren {
   AuthenticatedSettingsApiKeysRoute: typeof AuthenticatedSettingsApiKeysRoute
-  AuthenticatedSettingsIhostRoute: typeof AuthenticatedSettingsIhostRoute
+  AuthenticatedSettingsOauthAppsRoute: typeof AuthenticatedSettingsOauthAppsRoute
   AuthenticatedSettingsPasswordRoute: typeof AuthenticatedSettingsPasswordRoute
   AuthenticatedSettingsProfileRoute: typeof AuthenticatedSettingsProfileRoute
   AuthenticatedSettingsWebdavRoute: typeof AuthenticatedSettingsWebdavRoute
@@ -960,7 +1167,7 @@ interface AuthenticatedSettingsRouteRouteChildren {
 const AuthenticatedSettingsRouteRouteChildren: AuthenticatedSettingsRouteRouteChildren =
   {
     AuthenticatedSettingsApiKeysRoute: AuthenticatedSettingsApiKeysRoute,
-    AuthenticatedSettingsIhostRoute: AuthenticatedSettingsIhostRoute,
+    AuthenticatedSettingsOauthAppsRoute: AuthenticatedSettingsOauthAppsRoute,
     AuthenticatedSettingsPasswordRoute: AuthenticatedSettingsPasswordRoute,
     AuthenticatedSettingsProfileRoute: AuthenticatedSettingsProfileRoute,
     AuthenticatedSettingsWebdavRoute: AuthenticatedSettingsWebdavRoute,
@@ -974,6 +1181,8 @@ const AuthenticatedSettingsRouteRouteWithChildren =
 
 interface AuthenticatedTeamsTeamIdRouteRouteChildren {
   AuthenticatedTeamsTeamIdActivityRoute: typeof AuthenticatedTeamsTeamIdActivityRoute
+  AuthenticatedTeamsTeamIdBillingRoute: typeof AuthenticatedTeamsTeamIdBillingRoute
+  AuthenticatedTeamsTeamIdIhostRoute: typeof AuthenticatedTeamsTeamIdIhostRoute
   AuthenticatedTeamsTeamIdMembersRoute: typeof AuthenticatedTeamsTeamIdMembersRoute
   AuthenticatedTeamsTeamIdSettingsRoute: typeof AuthenticatedTeamsTeamIdSettingsRoute
   AuthenticatedTeamsTeamIdIndexRoute: typeof AuthenticatedTeamsTeamIdIndexRoute
@@ -983,6 +1192,8 @@ const AuthenticatedTeamsTeamIdRouteRouteChildren: AuthenticatedTeamsTeamIdRouteR
   {
     AuthenticatedTeamsTeamIdActivityRoute:
       AuthenticatedTeamsTeamIdActivityRoute,
+    AuthenticatedTeamsTeamIdBillingRoute: AuthenticatedTeamsTeamIdBillingRoute,
+    AuthenticatedTeamsTeamIdIhostRoute: AuthenticatedTeamsTeamIdIhostRoute,
     AuthenticatedTeamsTeamIdMembersRoute: AuthenticatedTeamsTeamIdMembersRoute,
     AuthenticatedTeamsTeamIdSettingsRoute:
       AuthenticatedTeamsTeamIdSettingsRoute,
@@ -1007,7 +1218,6 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedSharesIndexRoute: typeof AuthenticatedSharesIndexRoute
   AuthenticatedStoragesIndexRoute: typeof AuthenticatedStoragesIndexRoute
   AuthenticatedTasksIndexRoute: typeof AuthenticatedTasksIndexRoute
-  AuthenticatedTeamsIndexRoute: typeof AuthenticatedTeamsIndexRoute
   AuthenticatedTrashIndexRoute: typeof AuthenticatedTrashIndexRoute
   AuthenticatedUsersIndexRoute: typeof AuthenticatedUsersIndexRoute
 }
@@ -1026,13 +1236,24 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedSharesIndexRoute: AuthenticatedSharesIndexRoute,
   AuthenticatedStoragesIndexRoute: AuthenticatedStoragesIndexRoute,
   AuthenticatedTasksIndexRoute: AuthenticatedTasksIndexRoute,
-  AuthenticatedTeamsIndexRoute: AuthenticatedTeamsIndexRoute,
   AuthenticatedTrashIndexRoute: AuthenticatedTrashIndexRoute,
   AuthenticatedUsersIndexRoute: AuthenticatedUsersIndexRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =
   AuthenticatedRouteRoute._addFileChildren(AuthenticatedRouteRouteChildren)
+
+interface OauthRouteRouteChildren {
+  OauthConsentRoute: typeof OauthConsentRoute
+}
+
+const OauthRouteRouteChildren: OauthRouteRouteChildren = {
+  OauthConsentRoute: OauthConsentRoute,
+}
+
+const OauthRouteRouteWithChildren = OauthRouteRoute._addFileChildren(
+  OauthRouteRouteChildren,
+)
 
 interface SRouteRouteChildren {
   STokenRoute: typeof STokenRoute
@@ -1045,14 +1266,28 @@ const SRouteRouteChildren: SRouteRouteChildren = {
 const SRouteRouteWithChildren =
   SRouteRoute._addFileChildren(SRouteRouteChildren)
 
+interface URouteRouteChildren {
+  UUsernameRoute: typeof UUsernameRoute
+}
+
+const URouteRouteChildren: URouteRouteChildren = {
+  UUsernameRoute: UUsernameRoute,
+}
+
+const URouteRouteWithChildren =
+  URouteRoute._addFileChildren(URouteRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
+  OauthRouteRoute: OauthRouteRouteWithChildren,
   SRouteRoute: SRouteRouteWithChildren,
+  URouteRoute: URouteRouteWithChildren,
   DeviceRoute: DeviceRoute,
+  authForgotPasswordRoute: authForgotPasswordRoute,
+  authResetPasswordRoute: authResetPasswordRoute,
   authSignInRoute: authSignInRoute,
   authSignUpRoute: authSignUpRoute,
   StoreCheckoutRoute: StoreCheckoutRoute,
-  UUsernameRoute: UUsernameRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

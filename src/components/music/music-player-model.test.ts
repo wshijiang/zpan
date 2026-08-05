@@ -1,7 +1,7 @@
 import { DirType, ObjectStatus } from '@shared/constants'
 import type { StorageObject } from '@shared/types'
 import { describe, expect, it } from 'vitest'
-import { formatTrackSize, isMusicPreviewFile, toPreviewFile } from './music-player-model'
+import { isMusicPreviewFile, toPreviewFile } from './music-player-model'
 
 function makeObject(overrides: Partial<StorageObject & { downloadUrl?: string }> = {}): StorageObject & {
   downloadUrl?: string
@@ -18,6 +18,7 @@ function makeObject(overrides: Partial<StorageObject & { downloadUrl?: string }>
     object: 'object-key',
     storageId: 'storage-1',
     status: ObjectStatus.ACTIVE,
+    trashedAt: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     downloadUrl: 'https://example.com/song.mp3',
@@ -26,13 +27,6 @@ function makeObject(overrides: Partial<StorageObject & { downloadUrl?: string }>
 }
 
 describe('music player model', () => {
-  it('formats track size for playlist rows', () => {
-    expect(formatTrackSize(0)).toBe('0 B')
-    expect(formatTrackSize(512)).toBe('512 B')
-    expect(formatTrackSize(1536)).toBe('1.5 KB')
-    expect(formatTrackSize(2 * 1024 * 1024)).toBe('2.0 MB')
-  })
-
   it('detects audio preview files by extension or MIME type', () => {
     expect(isMusicPreviewFile({ id: '1', name: 'song.mp3', type: '', size: 1, downloadUrl: 'u' })).toBe(true)
     expect(isMusicPreviewFile({ id: '2', name: 'song.bin', type: 'audio/flac', size: 1, downloadUrl: 'u' })).toBe(true)

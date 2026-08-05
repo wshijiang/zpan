@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import { Trash2 } from 'lucide-react'
 import { useRef, useState } from 'react'
@@ -19,7 +19,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { deleteObject, emptyTrash, listObjects, restoreObject } from '@/lib/api'
+import { useInfiniteScroll } from '@/hooks/useInfiniteScroll'
+import { useServerEventSubscription } from '@/hooks/useServerEvents'
+import { listTrash, purgeTrashObject, restoreObject } from '@/lib/api'
 import { runSequentialOperation } from '@/lib/sequential-operation'
 
 export const Route = createFileRoute('/_authenticated/trash/')({
@@ -32,7 +34,6 @@ const PAGE_SIZE = 20
 function TrashPage() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [page, setPage] = useState(1)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [confirmDialog, setConfirmDialog] = useState<'delete' | 'empty' | null>(null)
   const [pendingDeleteIds, setPendingDeleteIds] = useState<string[]>([])
@@ -40,9 +41,20 @@ function TrashPage() {
   const [operationState, setOperationState] = useState<OperationProgressState | null>(null)
   const conflict = useConflictResolver()
 
-  const trashQuery = useQuery({
-    queryKey: [...QUERY_KEY, page, PAGE_SIZE],
-    queryFn: () => listObjects('', 'trashed', page, PAGE_SIZE),
+  useServerEventSubscription('trash-page', ['matter'], () => {
+    queryClient.invalidateQueries({ queryKey: QUERY_KEY })
+  })
+
+  const trashQuery = useInfiniteQuery({
+    queryKey: [...QUERY_KEY, PAGE_SIZE],
+    queryFn: ({ pageParam }) => listTrash({ pageToken: pageParam, pageSize: PAGE_SIZE }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextPageToken ?? undefined,
+  })
+  const loadMoreRef = useInfiniteScroll<HTMLDivElement>({
+    hasNextPage: trashQuery.hasNextPage,
+    isFetchingNextPage: trashQuery.isFetchingNextPage,
+    fetchNextPage: trashQuery.fetchNextPage,
   })
 
   async function runTrashPageOperation(
@@ -135,7 +147,7 @@ function TrashPage() {
 
   const deleteMutation = useMutation({
     mutationFn: async (ids: string[]) => {
-      await runTrashPageOperation(t('trash.deletePermanently'), ids, (id) => deleteObject(id))
+      await runTrashPageOperation(t('trash.deletePermanently'), ids, (id) => purgeTrashObject(id))
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY })
@@ -151,7 +163,18 @@ function TrashPage() {
   })
 
   const emptyTrashMutation = useMutation({
-    mutationFn: () => emptyTrash(),
+    // Trash lists roots only, so emptying = looping DELETE over every root (each
+    // does the recursive subtree purge backend-side). Paginate to collect them all.
+    mutationFn: async () => {
+      const allIds: string[] = []
+      let pageToken: string | undefined
+      do {
+        const res = await listTrash({ pageToken, pageSize: 100 })
+        allIds.push(...res.items.map((item) => item.id))
+        pageToken = res.nextPageToken ?? undefined
+      } while (pageToken)
+      await runTrashPageOperation(t('trash.empty'), allIds, (id) => purgeTrashObject(id))
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY })
       queryClient.invalidateQueries({ queryKey: ['user', 'quota'] })
@@ -164,9 +187,7 @@ function TrashPage() {
     },
   })
 
-  const items = trashQuery.data?.items ?? []
-  const total = trashQuery.data?.total ?? 0
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const items = trashQuery.data?.pages.flatMap((page) => page.items) ?? []
 
   function handleToggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -249,15 +270,9 @@ function TrashPage() {
             onDeletePermanently={handleDeleteSingle}
           />
 
-          {totalPages > 1 && (
-            <div className="flex items-center justify-end gap-2">
-              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-                {t('trash.prevPage')}
-              </Button>
-              <span className="text-sm text-muted-foreground">{t('trash.pageInfo', { page, total: totalPages })}</span>
-              <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
-                {t('trash.nextPage')}
-              </Button>
+          {trashQuery.hasNextPage && (
+            <div ref={loadMoreRef} className="py-3 text-center text-sm text-muted-foreground">
+              {trashQuery.isFetchingNextPage ? t('common.loading') : ''}
             </div>
           )}
         </>

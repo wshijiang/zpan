@@ -1,9 +1,10 @@
-import { and, eq } from 'drizzle-orm'
+import { AuthorizationScope } from '@shared/authorization'
+import { and, eq, sql } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import * as authSchema from '../db/auth-schema.js'
 import { authedHeaders, createTestApp } from '../test/setup.js'
-import { requireAdmin, requireTeamRole } from './auth.js'
+import { authorize } from './authz.js'
 
 type TestCtx = Awaited<ReturnType<typeof createTestApp>>
 type TestDb = TestCtx['db']
@@ -11,8 +12,12 @@ type TestApp = TestCtx['app']
 
 async function createAdminTestApp() {
   const { app, db, auth } = await createTestApp()
-  // Add a test-only route protected by requireAdmin
-  app.get('/api/admin-only', requireAdmin, (c) => c.json({ ok: true }))
+  const adminPolicy = {
+    scopes: [AuthorizationScope.SITE_ANALYTICS_READ],
+    siteRole: 'admin',
+  } as const
+  app.get('/api/admin-only', authorize(adminPolicy), (c) => c.json({ ok: true }))
+  app.post('/api/admin-only', authorize(adminPolicy), (c) => c.json({ ok: true }))
   return { app, db, auth }
 }
 
@@ -37,7 +42,7 @@ async function authedHeadersWithFreshSession(
   return { Cookie: cookies.join('; ') }
 }
 
-describe('requireAdmin middleware', () => {
+describe('admin authorization declaration', () => {
   it('returns 403 when user is not authenticated', async () => {
     const { app } = await createAdminTestApp()
     const res = await app.request('/api/admin-only')
@@ -58,8 +63,8 @@ describe('requireAdmin middleware', () => {
     await authedHeadersWithFreshSession(app, 'admin@example.com', 'password123456', 'Admin')
     const headers = await authedHeaders(app, 'regular@example.com', 'password123456')
     const res = await app.request('/api/admin-only', { headers })
-    const body = (await res.json()) as { error: string }
-    expect(body.error).toBe('Forbidden')
+    const body = (await res.json()) as { error: { message: string } }
+    expect(body.error.message).toBe('Forbidden')
   })
 
   it('allows request when user has admin role', async () => {
@@ -77,9 +82,87 @@ describe('requireAdmin middleware', () => {
     const body = (await res.json()) as { ok: boolean }
     expect(body.ok).toBe(true)
   })
+
+  it('reuses the session already resolved by auth middleware for safe methods', async () => {
+    const { app, auth } = await createAdminTestApp()
+    const headers = await authedHeadersWithFreshSession(app, 'admin@example.com', 'password123456', 'Admin')
+    const getSession = vi.spyOn(auth.api, 'getSession')
+
+    const res = await app.request('/api/admin-only', { headers })
+
+    expect(res.status).toBe(200)
+    expect(getSession).toHaveBeenCalledOnce()
+  })
+
+  it('forces a fresh session check for admin writes', async () => {
+    const { app, auth } = await createAdminTestApp()
+    const headers = await authedHeadersWithFreshSession(app, 'admin@example.com', 'password123456', 'Admin')
+    const getSession = vi.spyOn(auth.api, 'getSession')
+
+    const res = await app.request('/api/admin-only', { method: 'POST', headers })
+
+    expect(res.status).toBe(200)
+    expect(getSession).toHaveBeenCalledTimes(2)
+    expect(getSession).toHaveBeenLastCalledWith(expect.objectContaining({ query: { disableCookieCache: true } }))
+  })
 })
 
-// --- requireTeamRole helpers ---
+describe('authenticated user activity', () => {
+  it('records a successful Better Auth sign-in', async () => {
+    const { app, db } = await createTestApp()
+    await app.request('/api/auth/sign-up/email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Login User', email: 'login-activity@example.com', password: 'password123456' }),
+    })
+    await db.run(sql`UPDATE user SET last_active_at = NULL WHERE email = 'login-activity@example.com'`)
+
+    const response = await app.request('/api/auth/sign-in/email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'login-activity@example.com', password: 'password123456' }),
+    })
+    const [row] = await db
+      .select({ lastActiveAt: authSchema.user.lastActiveAt })
+      .from(authSchema.user)
+      .where(eq(authSchema.user.email, 'login-activity@example.com'))
+
+    expect(response.status).toBe(200)
+    expect(row.lastActiveAt).not.toBeNull()
+  })
+
+  it('updates Better Auth lastActiveAt without creating an audit event', async () => {
+    const { app, db } = await createTestApp()
+    const headers = await authedHeaders(app, 'active-user@example.com', 'password123456')
+    const oldActivity = new Date('2026-01-01T00:00:00.000Z')
+    const profileUpdatedAt = new Date('2026-02-01T00:00:00.000Z')
+    await db.run(sql`
+      UPDATE user
+      SET last_active_at = ${oldActivity.getTime()}, updated_at = ${profileUpdatedAt.getTime()}
+      WHERE email = 'active-user@example.com'
+    `)
+
+    const first = await app.request('/api/quotas/me', { headers })
+    const [afterFirst] = await db
+      .select({ lastActiveAt: authSchema.user.lastActiveAt, updatedAt: authSchema.user.updatedAt })
+      .from(authSchema.user)
+      .where(eq(authSchema.user.email, 'active-user@example.com'))
+    const second = await app.request('/api/quotas/me', { headers })
+    const [afterSecond] = await db
+      .select({ lastActiveAt: authSchema.user.lastActiveAt, updatedAt: authSchema.user.updatedAt })
+      .from(authSchema.user)
+      .where(eq(authSchema.user.email, 'active-user@example.com'))
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    expect(afterFirst.lastActiveAt?.getTime()).toBeGreaterThan(oldActivity.getTime())
+    expect(afterSecond.lastActiveAt).toEqual(afterFirst.lastActiveAt)
+    expect(afterSecond.updatedAt).toEqual(profileUpdatedAt)
+    expect(await db.all(sql`SELECT id FROM audit_events WHERE action = 'user_access'`)).toEqual([])
+  })
+})
+
+// --- session role policy helpers ---
 
 async function insertOrg(db: TestDb, slug: string) {
   const id = nanoid()
@@ -122,6 +205,7 @@ async function setActiveOrg(app: TestApp, cookies: string, orgId: string): Promi
     headers: {
       'Content-Type': 'application/json',
       Cookie: cookies,
+      Origin: 'http://localhost:3000',
     },
     body: JSON.stringify({ organizationId: orgId }),
   })
@@ -144,14 +228,28 @@ async function setActiveOrg(app: TestApp, cookies: string, orgId: string): Promi
 }
 
 function createTeamRoleTestApp() {
-  return createTestApp().then(({ app, db }) => {
-    app.get('/api/test/viewer', requireTeamRole('viewer'), (c) => c.json({ ok: true }))
-    app.post('/api/test/editor', requireTeamRole('editor'), (c) => c.json({ ok: true }))
-    return { app, db }
+  return createTestApp().then(({ app, db, deps }) => {
+    app.get(
+      '/api/test/viewer',
+      authorize({
+        scopes: [AuthorizationScope.TEAMS_READ],
+        minTeamRole: 'viewer',
+      }),
+      (c) => c.json({ ok: true }),
+    )
+    app.post(
+      '/api/test/editor',
+      authorize({
+        scopes: [AuthorizationScope.TEAMS_READ],
+        minTeamRole: 'editor',
+      }),
+      (c) => c.json({ ok: true }),
+    )
+    return { app, db, deps }
   })
 }
 
-describe('requireTeamRole — personal org bypass', () => {
+describe('session role policy — personal org bypass', () => {
   it('viewer-level route passes for personal org owner', async () => {
     const { app } = await createTeamRoleTestApp()
     const headers = await authedHeaders(app)
@@ -167,7 +265,29 @@ describe('requireTeamRole — personal org bypass', () => {
   })
 })
 
-describe('requireTeamRole — team org with owner role', () => {
+describe('session role policy — team org with owner role', () => {
+  it('rechecks current membership on every request', async () => {
+    const { app, db, deps } = await createTeamRoleTestApp()
+    const { userId, cookies } = await signUpAndGetSession(app, db, 'owner-cache@example.com')
+    const teamOrgId = await insertOrg(db, `team-${nanoid()}`)
+    await insertMember(db, teamOrgId, userId, 'owner')
+    const updatedCookies = await setActiveOrg(app, cookies, teamOrgId)
+    const getMemberRole = vi.spyOn(deps.org, 'getMemberRole')
+
+    expect((await app.request('/api/test/viewer', { headers: { Cookie: updatedCookies } })).status).toBe(200)
+    expect((await app.request('/api/test/viewer', { headers: { Cookie: updatedCookies } })).status).toBe(200)
+    expect(getMemberRole).toHaveBeenCalledTimes(2)
+
+    await db
+      .update(authSchema.member)
+      .set({ role: 'viewer' })
+      .where(and(eq(authSchema.member.organizationId, teamOrgId), eq(authSchema.member.userId, userId)))
+    expect(
+      (await app.request('/api/test/editor', { method: 'POST', headers: { Cookie: updatedCookies } })).status,
+    ).toBe(403)
+    expect(getMemberRole).toHaveBeenCalledTimes(3)
+  })
+
   it('viewer-level route passes for owner', async () => {
     const { app, db } = await createTeamRoleTestApp()
     const { userId, cookies } = await signUpAndGetSession(app, db, 'owner@example.com')
@@ -191,7 +311,7 @@ describe('requireTeamRole — team org with owner role', () => {
   })
 })
 
-describe('requireTeamRole — team org with editor role', () => {
+describe('session role policy — team org with editor role', () => {
   it('editor-level route passes for editor', async () => {
     const { app, db } = await createTeamRoleTestApp()
     const { userId, cookies } = await signUpAndGetSession(app, db, 'editor@example.com')
@@ -215,7 +335,7 @@ describe('requireTeamRole — team org with editor role', () => {
   })
 })
 
-describe('requireTeamRole — team org with viewer role', () => {
+describe('session role policy — team org with viewer role', () => {
   it('viewer-level route passes for viewer', async () => {
     const { app, db } = await createTeamRoleTestApp()
     const { userId, cookies } = await signUpAndGetSession(app, db, 'viewer@example.com')
@@ -246,12 +366,12 @@ describe('requireTeamRole — team org with viewer role', () => {
     const updatedCookies = await setActiveOrg(app, cookies, teamOrgId)
 
     const res = await app.request('/api/test/editor', { method: 'POST', headers: { Cookie: updatedCookies } })
-    const body = (await res.json()) as { error: string }
-    expect(body.error).toBe('Forbidden')
+    const body = (await res.json()) as { error: { message: string } }
+    expect(body.error.message).toBe('Forbidden')
   })
 })
 
-describe('requireTeamRole — team org with no membership', () => {
+describe('session role policy — team org with no membership', () => {
   it('viewer-level route returns 403 when user has no membership in the team org', async () => {
     const { app, db } = await createTeamRoleTestApp()
     const { userId, cookies } = await signUpAndGetSession(app, db, 'nomember@example.com')
@@ -282,7 +402,7 @@ describe('requireTeamRole — team org with no membership', () => {
   })
 })
 
-describe('requireTeamRole — unknown role', () => {
+describe('session role policy — unknown role', () => {
   it('editor-level route returns 403 for a user with an unknown role', async () => {
     const { app, db } = await createTeamRoleTestApp()
     const { userId, cookies } = await signUpAndGetSession(app, db, 'contrib@example.com')

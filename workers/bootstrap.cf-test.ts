@@ -1,3 +1,4 @@
+import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 import worker from './bootstrap'
@@ -26,11 +27,61 @@ describe('[CF] Worker fetch handler', () => {
     expect(await res.json()).toEqual({ status: 'ok' })
   })
 
+  it('publishes the Arazzo workflow description from the Worker runtime', async () => {
+    const root = await worker.fetch(new Request('https://pan.example.com/api'), testEnv)
+    const workflow = await worker.fetch(new Request('https://pan.example.com/api/workflows.arazzo.json'), testEnv)
+
+    expect(root.status).toBe(200)
+    expect(root.headers.get('Link')).toContain(
+      '</api/workflows.arazzo.json>; rel="describedby"; type="application/vnd.oai.workflows+json"',
+    )
+    expect(workflow.status).toBe(200)
+    expect(workflow.headers.get('Content-Type')).toBe('application/vnd.oai.workflows+json; version=1.1.0')
+    expect(await workflow.json()).toMatchObject({
+      arazzo: '1.1.0',
+      $self: 'https://pan.example.com/api/workflows.arazzo.json',
+      sourceDescriptions: [{ url: './openapi.json', type: 'openapi' }],
+    })
+  })
+
   it('splits and trims TRUSTED_ORIGINS when provided', async () => {
     const request = new Request('http://localhost/api/health')
     const envWithOrigins = { ...testEnv, TRUSTED_ORIGINS: ' https://a.example.com , https://b.example.com ' }
     const res = await worker.fetch(request, envWithOrigins)
     expect(res.status).toBe(200)
+  })
+
+  it('routes the WebDAV mount root with and without trailing slash', async () => {
+    for (const path of ['/dav', '/dav/']) {
+      const res = await worker.fetch(new Request(`http://localhost${path}`, { method: 'PROPFIND' }), testEnv)
+      expect(res.status).toBe(401)
+      expect(res.headers.get('WWW-Authenticate')).toBe('Basic realm="ZPan WebDAV"')
+    }
+  })
+
+  it('keeps auth initialization isolated between the DAV and primary hostnames', async () => {
+    const dav = await worker.fetch(new Request('https://dav.example.com/dav/', { method: 'PROPFIND' }), testEnv)
+    expect(dav.status).toBe(401)
+
+    const primary = await worker.fetch(new Request('https://pan.example.com/api/health'), testEnv)
+    expect(primary.status).toBe(200)
+  })
+
+  it('serves public config from the Worker response cache after the first request', async () => {
+    const request = new Request('https://cache-test.example.com/api/configz')
+    const firstCtx = createExecutionContext()
+    const first = await worker.fetch(request, testEnv, firstCtx)
+    await waitOnExecutionContext(firstCtx)
+
+    expect(first.status).toBe(200)
+    expect(first.headers.get('x-zpan-cache')).not.toBe('edge')
+
+    const secondCtx = createExecutionContext()
+    const second = await worker.fetch(request, testEnv, secondCtx)
+    await waitOnExecutionContext(secondCtx)
+
+    expect(second.status).toBe(200)
+    expect(second.headers.get('x-zpan-cache')).toBe('edge')
   })
 })
 
@@ -39,14 +90,14 @@ describe('[CF] SSR share OG meta injection', () => {
     const now = Date.now()
     await env.DB.prepare(
       `INSERT INTO matters (id, org_id, alias, name, type, size, dirtype, parent, object, storage_id, status, created_at, updated_at)
-       VALUES ('ssr-matter-1', 'org-1', 'ssr-alias-1', 'design-spec.pdf', 'application/pdf', 4096, 0, '', 'obj/key.pdf', 'st-1', 'active', ?, ?)`,
+       VALUES ('ssrmatter1', 'org1', 'ssralias1', 'design-spec.pdf', 'application/pdf', 4096, 0, '', 'obj/key.pdf', 'st1', 'active', ?, ?)`,
     )
       .bind(now, now)
       .run()
 
     await env.DB.prepare(
       `INSERT INTO shares (id, token, kind, matter_id, org_id, creator_id, password_hash, expires_at, download_limit, views, downloads, status, created_at)
-       VALUES ('ssr-share-1', 'ssrtoken01', 'landing', 'ssr-matter-1', 'org-1', 'user-1', NULL, NULL, NULL, 0, 0, 'active', ?)`,
+       VALUES ('ssrshare1', 'ssrtoken01', 'landing', 'ssrmatter1', 'org1', 'user1', NULL, NULL, NULL, 0, 0, 'active', ?)`,
     )
       .bind(now)
       .run()

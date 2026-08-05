@@ -3,7 +3,7 @@ import type { PublicImageMime } from '@shared/schemas'
 import { MAX_PUBLIC_IMAGE_SIZE, PUBLIC_IMAGE_MIMES } from '@shared/schemas'
 import { useMutation } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
-import { Camera, Loader2 } from 'lucide-react'
+import { Camera, ExternalLink, Loader2 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from '@/components/ui/input'
 import { deleteAvatar, uploadAvatar } from '@/lib/api'
 import { authClient, useSession } from '@/lib/auth-client'
+import { getInitials } from '@/lib/format'
 
 export const Route = createFileRoute('/_authenticated/settings/profile')({
   component: ProfilePage,
@@ -26,19 +27,16 @@ const profileSchema = z.object({
 
 type ProfileFormValues = z.infer<typeof profileSchema>
 
-function getInitials(name: string): string {
-  return name
-    .split(' ')
-    .map((n) => n[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2)
-}
-
-// Refresh the session so useSession() sees DB changes made outside
-// better-auth.updateUser (e.g. avatar commit / delete).
+// Sync useSession() with avatar changes written outside better-auth (our /users/me/avatar
+// endpoint). Two steps are required:
+//  1. getSession({ disableCookieCache }) re-reads user.image from the DB and refreshes the
+//     5-min session cookie cache — without it the cached session keeps the old avatar.
+//  2. $store.notify('$sessionSignal') is what actually re-renders: useSession() only refetches
+//     when better-auth's session signal toggles, and an external endpoint never toggles it,
+//     so without this the new avatar shows only after a full page reload.
 async function refreshSession() {
-  await authClient.getSession()
+  await authClient.getSession({ query: { disableCookieCache: true } })
+  authClient.$store.notify('$sessionSignal')
 }
 
 function AvatarCard() {
@@ -100,7 +98,9 @@ function AvatarCard() {
           className="group relative flex-shrink-0 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <Avatar className="size-20 border">
-            {user?.image && <AvatarImage src={user.image} alt={displayName} />}
+            {/* Always render so radix re-runs its loading status when the avatar is removed
+                (src -> undefined) and falls back to the initials instead of going blank. */}
+            <AvatarImage src={user?.image ?? undefined} alt={displayName} />
             <AvatarFallback className="text-xl font-semibold">{getInitials(displayName)}</AvatarFallback>
           </Avatar>
           <span className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
@@ -182,7 +182,7 @@ function DisplayNameCard() {
   )
 }
 
-function UsernameCard() {
+export function UsernameCard() {
   const { t } = useTranslation()
   const { data: session } = useSession()
   const username = (session?.user as { username?: string })?.username ?? ''
@@ -201,8 +201,16 @@ function UsernameCard() {
           <Input value={username} disabled className="rounded-l-none" />
         </div>
       </CardContent>
-      <CardFooter className="border-t bg-muted/30">
+      <CardFooter className="justify-between border-t bg-muted/30">
         <p className="text-sm text-muted-foreground">{t('settings.profile.username.hint')}</p>
+        {username && (
+          <Button asChild variant="outline" size="sm">
+            <a href={`/u/${username}`} target="_blank" rel="noopener noreferrer">
+              {t('settings.profile.publicHomepage')}
+              <ExternalLink />
+            </a>
+          </Button>
+        )}
       </CardFooter>
     </Card>
   )

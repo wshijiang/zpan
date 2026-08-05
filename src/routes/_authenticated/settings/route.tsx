@@ -3,20 +3,24 @@ import { Settings as SettingsIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { PageHeader } from '@/components/layout/page-header'
 import { PageTabs } from '@/components/layout/page-tabs'
+import { useSiteConfig } from '@/hooks/use-site-config'
 
 export const Route = createFileRoute('/_authenticated/settings')({
   component: SettingsLayout,
 })
 
-function SettingsLayout() {
+export function SettingsLayout() {
   const { t } = useTranslation()
+  const { data: siteConfig } = useSiteConfig()
 
   const tabs = [
     { to: '/settings/profile', label: t('settings.tabProfile') },
     { to: '/settings/password', label: t('settings.tabPassword') },
-    { to: '/settings/webdav', label: t('settings.tabWebDav') },
-    { to: '/settings/ihost', label: t('settings.tabImageHosting') },
+    ...(siteConfig?.services.webdav.enabled === false
+      ? []
+      : [{ to: '/settings/webdav', label: t('settings.tabWebDav') }]),
     { to: '/settings/api-keys', label: t('settings.tabApiKeys') },
+    { to: '/settings/oauth-apps', label: t('settings.tabOAuthApps') },
   ]
 
   return (

@@ -1,10 +1,3 @@
-export const StorageMode = {
-  PRIVATE: 'private',
-  PUBLIC: 'public',
-} as const
-
-export type StorageMode = (typeof StorageMode)[keyof typeof StorageMode]
-
 export const UserRole = {
   ADMIN: 'admin',
   MEMBER: 'member',
@@ -21,16 +14,29 @@ export const DirType = {
 export type DirType = (typeof DirType)[keyof typeof DirType]
 
 export const StorageStatus = {
-  ACTIVE: 'active',
-  INACTIVE: 'inactive',
+  UNKNOWN: 'unknown',
+  HEALTHY: 'healthy',
+  UNHEALTHY: 'unhealthy',
 } as const
 
 export type StorageStatus = (typeof StorageStatus)[keyof typeof StorageStatus]
 
+export const StorageStatusReason = {
+  CORS: 'cors',
+  AUTHENTICATION_FAILED: 'authentication_failed',
+  PERMISSION_DENIED: 'permission_denied',
+  BUCKET_NOT_FOUND: 'bucket_not_found',
+  NETWORK_ERROR: 'network_error',
+  UNKNOWN: 'unknown',
+} as const
+
+export type StorageStatusReason = (typeof StorageStatusReason)[keyof typeof StorageStatusReason]
+
+// Soft delete is tracked by the `trashedAt` timestamp, not a status value:
+// live = active & trashedAt IS NULL, trash = active & trashedAt IS NOT NULL.
 export const ObjectStatus = {
   DRAFT: 'draft',
   ACTIVE: 'active',
-  TRASHED: 'trashed',
 } as const
 
 export type ObjectStatus = (typeof ObjectStatus)[keyof typeof ObjectStatus]
@@ -47,7 +53,7 @@ export const ZPAN_CLOUD_URL_DEFAULT = 'https://cloud.zpan.space'
 export const ZPAN_GITHUB_URL = 'https://github.com/saltbo/zpan'
 // The About page renders this hand-maintained, product-facing changelog in a
 // side drawer; raw.githubusercontent.com serves the file with CORS.
-export const ZPAN_CHANGELOG_RAW_URL = 'https://raw.githubusercontent.com/saltbo/zpan/master/CHANGELOG.md'
+export const ZPAN_CHANGELOG_RAW_URL = 'https://raw.githubusercontent.com/saltbo/zpan/main/CHANGELOG.md'
 // The latest-version indicator comes from the newest published GitHub Release
 // (tag_name), not the changelog file — releases are the source of truth for
 // "what's the latest shipped version".

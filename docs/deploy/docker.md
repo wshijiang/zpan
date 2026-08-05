@@ -2,6 +2,18 @@
 
 ZPan ships as a single Docker image. By default it uses an embedded SQLite database (`better-sqlite3`). For production multi-replica deployments you can opt into [Turso](https://turso.tech) (libSQL) as a shared remote database.
 
+## Image tags
+
+Images are published to `ghcr.io/saltbo/zpan`. A CLI-only variant (downloader) is published under the matching `-cli` suffix.
+
+| Tag | Built from | When | Use for |
+| --- | --- | --- | --- |
+| `latest`, `2.6.1`, `2.6`, `2` | release tags (`v*`) | on every release | **production** — stable, version-pinned |
+| `dev` | `main` HEAD | every push to `main` (after CI passes) | trying the newest code as soon as it lands |
+| `nightly` | `main` HEAD | daily, full no-cache rebuild | newest code **plus** fresh base-image/OS security patches |
+
+`dev` and `nightly` are moving, unreviewed tags — do not pin production to them. Pulling without a tag (`ghcr.io/saltbo/zpan`) resolves to `latest`.
+
 ## Default: local SQLite
 
 No extra configuration needed. Mount a volume so the database survives container restarts:
@@ -26,6 +38,8 @@ volumes:
 ```
 
 Migrations run automatically at startup. The compose files in this repository also include an optional downloader service using the CLI-only tag (`ghcr.io/saltbo/zpan:latest-cli`). On first start, `zpan downloader up` prints a device authorization URL in the container logs and waits. Open that URL as an admin user; after approval the downloader registers itself, saves its token under `/data/config.yaml`, and continues running.
+
+To expose WebDAV at the root of a dedicated hostname, enable WebDAV in Admin Settings, set the site's **Public URL**, and configure your front proxy to route `dav.<public-hostname>` to ZPan while internally prefixing requests with `/dav`. A different hostname can be configured in the WebDAV settings drawer. See [WebDAV custom domains](../webdav-custom-domain.md) for the complete proxy contract.
 
 To run only a remote downloader on another machine:
 
@@ -143,18 +157,18 @@ If you prefer an explicit external trigger (e.g. to integrate with your monitori
 3. **Trigger a refresh or traffic sync** with HTTP POST:
 
    ```
-   POST https://your-domain.example/api/licensing/refresh-cron?secret=<REFRESH_CRON_SECRET>
+   POST https://your-domain.example/api/internal/licensing/refresh-runs
    ```
 
    ```
-   POST https://your-domain.example/api/licensing/traffic-sync-runs?secret=<REFRESH_CRON_SECRET>
+   POST https://your-domain.example/api/internal/traffic-sync-runs
    ```
 
    To run on a schedule via host cron, add to your crontab:
 
    ```cron
-   0 */6 * * * curl -s -X POST "https://your-domain.example/api/licensing/refresh-cron?secret=<REFRESH_CRON_SECRET>"
-   */10 * * * * curl -s -X POST "https://your-domain.example/api/licensing/traffic-sync-runs?secret=<REFRESH_CRON_SECRET>"
+   0 */6 * * * curl -s -X POST -H "Authorization: Bearer <REFRESH_CRON_SECRET>" "https://your-domain.example/api/internal/licensing/refresh-runs"
+   */10 * * * * curl -s -X POST -H "Authorization: Bearer <REFRESH_CRON_SECRET>" "https://your-domain.example/api/internal/traffic-sync-runs"
    ```
 
-If `REFRESH_CRON_SECRET` is not set, the endpoint returns `401` for all requests.
+Send `Authorization: Bearer <REFRESH_CRON_SECRET>` with every scheduler request. If `REFRESH_CRON_SECRET` is not set, the endpoint returns `401` for all requests.

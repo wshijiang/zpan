@@ -1,28 +1,15 @@
 import { expect, test } from '@playwright/test'
 import { expandSignUpForm, signInAsAdmin } from './helpers'
 
-async function setSignupMode(page: import('@playwright/test').Page, value: string) {
-  const result = await page.evaluate(async (nextValue) => {
-    const res = await fetch('/api/system/options/auth_signup_mode', {
-      method: 'PUT',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value: nextValue, public: true }),
-    })
-    return { ok: res.ok, status: res.status, body: await res.text() }
-  }, value)
-
-  expect(result.ok, result.body).toBe(true)
-}
-
 async function saveEmailConfig(page: import('@playwright/test').Page) {
   const result = await page.evaluate(async () => {
-    const res = await fetch('/api/admin/email-config', {
+    const res = await fetch('/api/site/settings/email', {
       method: 'PUT',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         enabled: true,
+        requireEmailVerification: false,
         provider: 'http',
         from: 'no-reply@example.com',
         http: {
@@ -38,21 +25,15 @@ async function saveEmailConfig(page: import('@playwright/test').Page) {
 }
 
 test.describe('Site invitation signup flow', () => {
-  test.afterEach(async ({ page }) => {
-    await signInAsAdmin(page)
-    await setSignupMode(page, '')
-  })
-
   test('admin can inspect invitation and invited user can register with token @desktop', async ({ page }) => {
     const invitationEmail = `invited-${Date.now()}@example.com`
 
     await signInAsAdmin(page)
-    await setSignupMode(page, 'closed')
     await saveEmailConfig(page)
     await page.goto('/admin/users')
 
     await Promise.all([
-      page.waitForResponse((r) => r.url().includes('/api/admin/site-invitations') && r.request().method() === 'GET'),
+      page.waitForResponse((r) => r.url().includes('/api/site/invitations') && r.request().method() === 'GET'),
       page.getByRole('button', { name: 'Invite User' }).click(),
     ])
     const dialog = page.getByRole('dialog')
@@ -61,7 +42,7 @@ test.describe('Site invitation signup flow', () => {
 
     await page.getByLabel('Invite email').fill(invitationEmail)
     const [createResp] = await Promise.all([
-      page.waitForResponse((r) => r.url().includes('/api/admin/site-invitations') && r.request().method() === 'POST'),
+      page.waitForResponse((r) => r.url().includes('/api/site/invitations') && r.request().method() === 'POST'),
       page.getByRole('button', { name: 'Send Invite', exact: true }).click(),
     ])
     expect(createResp.status()).toBe(201)
@@ -95,7 +76,7 @@ test.describe('Site invitation signup flow', () => {
     await signInAsAdmin(page)
     await page.goto('/admin/users')
     await Promise.all([
-      page.waitForResponse((r) => r.url().includes('/api/admin/site-invitations') && r.request().method() === 'GET'),
+      page.waitForResponse((r) => r.url().includes('/api/site/invitations') && r.request().method() === 'GET'),
       page.getByRole('button', { name: 'Invite User' }).click(),
     ])
     const acceptedDialog = page.getByRole('dialog')

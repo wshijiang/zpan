@@ -29,7 +29,6 @@ const storageConfig = {
   region: 'auto',
   accessKey: requireEnv('DEV_STORAGE_ACCESS_KEY'),
   secretKey: requireEnv('DEV_STORAGE_SECRET_KEY'),
-  customHost: '',
 }
 
 // ── 1. reset database ──
@@ -68,14 +67,14 @@ if (githubClientId && githubClientSecret) {
 }
 
 // create storage
-const storageRes = await app.request('/api/admin/storages', {
+const storageRes = await app.request('/api/site/storages', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json', Cookie: cookies },
   body: JSON.stringify(storageConfig),
 })
 if (!storageRes.ok) throw new Error(`create storage failed: ${storageRes.status} ${await storageRes.text()}`)
-const storage = (await storageRes.json()) as { id: string; title: string }
-console.log(`created storage: ${storage.title} (${storage.id})`)
+const storage = (await storageRes.json()) as { id: string; bucket: string }
+console.log(`created storage: ${storage.bucket} (${storage.id})`)
 
 console.log('\ndone!')
 
@@ -93,7 +92,7 @@ function resetNode(): Platform {
   migrate(db, { migrationsFolder: './migrations' })
   console.log('database migrated')
 
-  return { db, getEnv: (key) => process.env[key] }
+  return { db, getEnv: (key) => process.env[key], getBinding: () => undefined }
 }
 
 function resetD1(): Platform {
@@ -112,7 +111,7 @@ function resetD1(): Platform {
   const sqlite = new Database(dbFile)
   const db = drizzle(sqlite, { schema: { ...schema, ...authSchema } })
 
-  return { db, getEnv: (key) => process.env[key] }
+  return { db, getEnv: (key) => process.env[key], getBinding: () => undefined }
 }
 
 function findD1SqliteFile(): string {

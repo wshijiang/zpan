@@ -1,80 +1,60 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import type { Storage } from '@shared/types'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff } from 'lucide-react'
-import type { ReactNode } from 'react'
-import { useEffect, useState } from 'react'
+import { type ComponentProps, forwardRef, useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { z } from 'zod'
+import { AdminFormDrawer, AdminFormField, AdminFormLabel } from '@/components/admin/admin-form-drawer'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
-import { createStorage, updateStorage } from '@/lib/api'
-import { formatSize } from '@/lib/format'
-
-const UNITS = { MB: 1024 * 1024, GB: 1024 * 1024 * 1024, TB: 1024 * 1024 * 1024 * 1024 } as const
-type Unit = keyof typeof UNITS
-
-function bytesToDisplay(bytes: number): { value: number; unit: Unit } {
-  if (bytes === 0) return { value: 0, unit: 'GB' }
-  if (bytes >= UNITS.TB && bytes % UNITS.TB === 0) return { value: bytes / UNITS.TB, unit: 'TB' }
-  if (bytes >= UNITS.GB && bytes % UNITS.GB === 0) return { value: bytes / UNITS.GB, unit: 'GB' }
-  return { value: bytes / UNITS.MB, unit: 'MB' }
-}
+import { createStorage, replaceStorage } from '@/lib/api'
+import { eplistEndpointUrl, findEplistProvider, listEplistEndpoints, listEplistProviders } from '@/lib/eplist'
 
 const storageFormSchema = z.object({
-  title: z.string().min(1),
-  mode: z.enum(['private', 'public']),
+  provider: z.string(),
   bucket: z.string().min(1),
   endpoint: z.string().url(),
   region: z.string().min(1),
   accessKey: z.string().min(1),
   secretKey: z.string().min(1),
-  customHost: z.string().optional(),
-  capacityValue: z.coerce.number<number>().min(0),
-  capacityUnit: z.enum(['MB', 'GB', 'TB']),
-  egressCreditBillingEnabled: z.boolean(),
-  egressCreditUnitValue: z.coerce.number<number>().min(1),
-  egressCreditUnit: z.enum(['MB', 'GB', 'TB']),
-  egressCreditPerUnit: z.coerce.number<number>().int().min(1),
+  forcePathStyle: z.boolean(),
 })
 
 type StorageFormValues = z.infer<typeof storageFormSchema>
 
 const DEFAULT_VALUES: StorageFormValues = {
-  title: '',
-  mode: 'private',
+  provider: '',
   bucket: '',
   endpoint: '',
   region: 'auto',
   accessKey: '',
   secretKey: '',
-  customHost: '',
-  capacityValue: 0,
-  capacityUnit: 'GB',
-  egressCreditBillingEnabled: false,
-  egressCreditUnitValue: 100,
-  egressCreditUnit: 'MB',
-  egressCreditPerUnit: 1,
+  forcePathStyle: true,
 }
+
+const PREVIEW_OBJECT_KEY = 'example-object'
 
 interface StorageFormDrawerProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   storage: Storage | null
-  hasTrafficBilling: boolean
+  onCreated?: (storage: Storage) => void
 }
 
-export function StorageFormDrawer({ open, onOpenChange, storage, hasTrafficBilling }: StorageFormDrawerProps) {
+export function StorageFormDrawer({ open, onOpenChange, storage, onCreated }: StorageFormDrawerProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [showSecret, setShowSecret] = useState(false)
   const isEditing = storage !== null
+  const providersQuery = useQuery({
+    queryKey: ['eplist', 'providers'],
+    queryFn: listEplistProviders,
+    staleTime: 24 * 60 * 60 * 1000,
+  })
 
   const form = useForm<StorageFormValues>({
     resolver: zodResolver(storageFormSchema),
@@ -84,51 +64,37 @@ export function StorageFormDrawer({ open, onOpenChange, storage, hasTrafficBilli
   useEffect(() => {
     if (!open) return
     if (storage) {
-      const { value, unit } = bytesToDisplay(storage.capacity ?? 0)
-      const egressUnit = bytesToDisplay(storage.egressCreditUnitBytes ?? UNITS.MB * 100)
       form.reset({
-        title: storage.title,
-        mode: storage.mode,
+        provider: storage.provider ?? '',
         bucket: storage.bucket,
         endpoint: storage.endpoint,
         region: storage.region,
         accessKey: storage.accessKey,
         secretKey: storage.secretKey,
-        customHost: storage.customHost || '',
-        capacityValue: value,
-        capacityUnit: unit,
-        egressCreditBillingEnabled: hasTrafficBilling ? (storage.egressCreditBillingEnabled ?? false) : false,
-        egressCreditUnitValue: egressUnit.value,
-        egressCreditUnit: egressUnit.unit,
-        egressCreditPerUnit: storage.egressCreditPerUnit ?? 1,
+        forcePathStyle: storage.forcePathStyle ?? true,
       })
     } else {
-      form.reset({ ...DEFAULT_VALUES, egressCreditBillingEnabled: false })
+      form.reset(DEFAULT_VALUES)
     }
     setShowSecret(false)
-  }, [open, storage, form, hasTrafficBilling])
+  }, [open, storage, form])
 
   const mutation = useMutation({
-    mutationFn: ({
-      capacityValue,
-      capacityUnit,
-      egressCreditUnitValue,
-      egressCreditUnit,
-      ...rest
-    }: StorageFormValues) => {
-      const capacity = capacityValue * UNITS[capacityUnit]
-      const egressCreditUnitBytes = egressCreditUnitValue * UNITS[egressCreditUnit]
-      const payload = {
-        ...rest,
-        egressCreditBillingEnabled: hasTrafficBilling ? rest.egressCreditBillingEnabled : false,
-        capacity,
-        egressCreditUnitBytes,
-      }
-      return isEditing ? updateStorage(storage.id, payload) : createStorage(payload)
-    },
-    onSuccess: () => {
+    mutationFn: (values: StorageFormValues) =>
+      isEditing
+        ? replaceStorage(storage.id, {
+            ...values,
+            capacity: storage.capacity,
+            egressCreditBillingEnabled: storage.egressCreditBillingEnabled,
+            egressCreditUnitBytes: storage.egressCreditUnitBytes,
+            egressCreditPerUnit: storage.egressCreditPerUnit,
+            enabled: storage.enabled,
+          })
+        : createStorage(values),
+    onSuccess: (savedStorage) => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'storages'] })
       onOpenChange(false)
+      if (!isEditing) onCreated?.(savedStorage)
       toast.success(isEditing ? t('admin.storages.updated') : t('admin.storages.created'))
     },
     onError: (err) => {
@@ -140,168 +106,371 @@ export function StorageFormDrawer({ open, onOpenChange, storage, hasTrafficBilli
     mutation.mutate(values)
   }
 
+  const provider = form.watch('provider')
+  const bucket = form.watch('bucket')
+  const endpoint = form.watch('endpoint')
+  const region = form.watch('region')
+  const forcePathStyle = form.watch('forcePathStyle')
+  const providers = providersQuery.data ?? []
+  const selectedProvider = findEplistProvider(providers, provider)
+  const preview = useMemo(
+    () => buildStoragePreview({ bucket, endpoint, region, forcePathStyle }),
+    [bucket, endpoint, region, forcePathStyle],
+  )
+  const endpointsQuery = useQuery({
+    queryKey: ['eplist', 'endpoints', selectedProvider?.slug],
+    queryFn: () => {
+      if (!selectedProvider) throw new Error('provider_not_selected')
+      return listEplistEndpoints(selectedProvider)
+    },
+    enabled: Boolean(selectedProvider),
+    staleTime: 24 * 60 * 60 * 1000,
+  })
+  const endpointOptions = endpointsQuery.data ?? []
+  const regionOptions = useMemo(() => {
+    const regions = new Set<string>()
+    for (const item of endpointOptions) regions.add(item.region)
+    return Array.from(regions).map((region) => ({ value: region }))
+  }, [endpointOptions])
+
+  function handleProviderInputChange(value: string) {
+    form.setValue('provider', value, { shouldDirty: true })
+  }
+
+  function handleProviderSelect(value: string) {
+    form.setValue('provider', value, { shouldDirty: true })
+    form.setValue('endpoint', '', { shouldDirty: true, shouldValidate: true })
+    form.setValue('region', '', { shouldDirty: true, shouldValidate: true })
+  }
+
+  function handleEndpointChange(value: string) {
+    form.setValue('endpoint', value, { shouldDirty: true, shouldValidate: true })
+    const normalized = value.replace(/^https?:\/\//i, '')
+    const selectedEndpoint = endpointOptions.find((item) => item.endpoint === normalized)
+    if (selectedEndpoint) {
+      form.setValue('region', selectedEndpoint.region, { shouldDirty: true, shouldValidate: true })
+    }
+  }
+
+  function handleRegionChange(value: string) {
+    form.setValue('region', value, { shouldDirty: true, shouldValidate: true })
+    const selectedEndpoint = endpointOptions.find((item) => item.region === value)
+    if (selectedEndpoint) {
+      form.setValue('endpoint', eplistEndpointUrl(selectedEndpoint.endpoint), {
+        shouldDirty: true,
+        shouldValidate: true,
+      })
+    }
+  }
+
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="sm:max-w-lg">
-        <SheetHeader>
-          <SheetTitle>{isEditing ? t('admin.storages.editTitle') : t('admin.storages.addTitle')}</SheetTitle>
-        </SheetHeader>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex-1 overflow-y-auto px-4">
-            <div className="grid gap-4">
-              <FormField label={t('admin.storages.fieldTitle')} error={form.formState.errors.title?.message}>
-                <Input {...form.register('title')} />
-              </FormField>
+    <AdminFormDrawer
+      open={open}
+      onOpenChange={onOpenChange}
+      title={isEditing ? t('admin.storages.editTitle') : t('admin.storages.addTitle')}
+      bodyClassName="grid auto-rows-min content-start gap-4"
+      formProps={{ onSubmit: form.handleSubmit(onSubmit) }}
+      footer={
+        <>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit" disabled={mutation.isPending}>
+            {mutation.isPending ? t('common.loading') : t('common.save')}
+          </Button>
+        </>
+      }
+    >
+      <AdminFormField
+        id="storage-provider"
+        label={t('admin.storages.fieldProvider')}
+        help={t('admin.storages.providerHint')}
+        error={form.formState.errors.provider?.message}
+      >
+        {(controlProps) => (
+          <FreeInputDropdown
+            {...form.register('provider')}
+            {...controlProps}
+            value={provider}
+            placeholder={t('admin.storages.providerPlaceholder')}
+            options={providers.map((item) => ({ value: item.slug, label: item.displayName }))}
+            onValueChange={handleProviderInputChange}
+            onOptionSelect={handleProviderSelect}
+          />
+        )}
+      </AdminFormField>
 
-              <FormField label={t('admin.storages.fieldMode')} error={form.formState.errors.mode?.message}>
-                <select
-                  {...form.register('mode')}
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  <option value="private">{t('admin.storages.modePrivate')}</option>
-                  <option value="public">{t('admin.storages.modePublic')}</option>
-                </select>
-              </FormField>
+      <AdminFormField
+        id="storage-bucket"
+        label={t('admin.storages.fieldBucket')}
+        required
+        error={form.formState.errors.bucket?.message}
+      >
+        <Input {...form.register('bucket')} placeholder={t('admin.storages.bucketPlaceholder')} />
+      </AdminFormField>
 
-              <FormField label={t('admin.storages.fieldBucket')} error={form.formState.errors.bucket?.message}>
-                <Input {...form.register('bucket')} />
-              </FormField>
+      <AdminFormField
+        id="storage-endpoint"
+        label={t('admin.storages.fieldEndpoint')}
+        required
+        error={form.formState.errors.endpoint?.message}
+      >
+        {(controlProps) => (
+          <FreeInputDropdown
+            {...form.register('endpoint')}
+            {...controlProps}
+            value={endpoint}
+            placeholder={t('admin.storages.endpointPlaceholder')}
+            options={endpointOptions.map((item) => ({
+              value: eplistEndpointUrl(item.endpoint),
+              label: eplistEndpointUrl(item.endpoint),
+              description: item.region,
+            }))}
+            onValueChange={handleEndpointChange}
+          />
+        )}
+      </AdminFormField>
 
-              <FormField label={t('admin.storages.fieldEndpoint')} error={form.formState.errors.endpoint?.message}>
-                <Input {...form.register('endpoint')} placeholder="https://s3.amazonaws.com" />
-              </FormField>
+      <AdminFormField
+        id="storage-region"
+        label={t('admin.storages.fieldRegion')}
+        required
+        error={form.formState.errors.region?.message}
+      >
+        {(controlProps) => (
+          <FreeInputDropdown
+            {...form.register('region')}
+            {...controlProps}
+            value={region}
+            placeholder={t('admin.storages.regionPlaceholder')}
+            options={regionOptions}
+            onValueChange={handleRegionChange}
+          />
+        )}
+      </AdminFormField>
 
-              <FormField label={t('admin.storages.fieldRegion')} error={form.formState.errors.region?.message}>
-                <Input {...form.register('region')} placeholder="auto" />
-              </FormField>
+      <AdminFormField
+        id="storage-access-key"
+        label={t('admin.storages.fieldAccessKey')}
+        required
+        error={form.formState.errors.accessKey?.message}
+      >
+        <Input {...form.register('accessKey')} placeholder={t('admin.storages.accessKeyPlaceholder')} />
+      </AdminFormField>
 
-              <FormField label={t('admin.storages.fieldAccessKey')} error={form.formState.errors.accessKey?.message}>
-                <Input {...form.register('accessKey')} />
-              </FormField>
-
-              <FormField label={t('admin.storages.fieldSecretKey')} error={form.formState.errors.secretKey?.message}>
-                <div className="relative">
-                  <Input {...form.register('secretKey')} type={showSecret ? 'text' : 'password'} className="pr-10" />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    className="absolute right-2 top-1/2 -translate-y-1/2"
-                    onClick={() => setShowSecret((v) => !v)}
-                  >
-                    {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                </div>
-              </FormField>
-
-              <FormField label={t('admin.storages.fieldCustomHost')} error={form.formState.errors.customHost?.message}>
-                <Input {...form.register('customHost')} placeholder={t('admin.storages.customHostPlaceholder')} />
-              </FormField>
-
-              <FormField label={t('admin.storages.fieldCapacity')} error={form.formState.errors.capacityValue?.message}>
-                <div className="flex items-center gap-2">
-                  <Input type="number" min={0} step={1} className="w-32" {...form.register('capacityValue')} />
-                  <Select
-                    value={form.watch('capacityUnit')}
-                    onValueChange={(v) => form.setValue('capacityUnit', v as Unit)}
-                  >
-                    <SelectTrigger className="w-24">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="MB">MB</SelectItem>
-                      <SelectItem value="GB">GB</SelectItem>
-                      <SelectItem value="TB">TB</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <span className="text-sm text-muted-foreground">
-                    {form.watch('capacityValue') > 0
-                      ? `= ${formatSize(form.watch('capacityValue') * UNITS[form.watch('capacityUnit')])}`
-                      : t('admin.storages.capacityUnlimited')}
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground">{t('admin.storages.capacityHint')}</p>
-              </FormField>
-
-              <div className="rounded-md border p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <Label htmlFor="egressCreditBillingEnabled">{t('admin.storages.egressBilling')}</Label>
-                    <p className="text-xs text-muted-foreground">{t('admin.storages.egressBillingHint')}</p>
-                  </div>
-                  <Switch
-                    id="egressCreditBillingEnabled"
-                    disabled={!hasTrafficBilling}
-                    checked={form.watch('egressCreditBillingEnabled')}
-                    onCheckedChange={(checked) =>
-                      form.setValue('egressCreditBillingEnabled', hasTrafficBilling && checked)
-                    }
-                  />
-                </div>
-                {!hasTrafficBilling && (
-                  <p className="mt-2 text-xs text-muted-foreground">{t('admin.storages.egressBillingBusinessOnly')}</p>
-                )}
-                {form.watch('egressCreditBillingEnabled') && (
-                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                    <FormField
-                      label={t('admin.storages.egressBillingUnit')}
-                      error={form.formState.errors.egressCreditUnitValue?.message}
-                    >
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="number"
-                          min={1}
-                          step={1}
-                          className="w-28"
-                          {...form.register('egressCreditUnitValue')}
-                        />
-                        <Select
-                          value={form.watch('egressCreditUnit')}
-                          onValueChange={(v) => form.setValue('egressCreditUnit', v as Unit)}
-                        >
-                          <SelectTrigger className="w-24">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="MB">MB</SelectItem>
-                            <SelectItem value="GB">GB</SelectItem>
-                            <SelectItem value="TB">TB</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </FormField>
-                    <FormField
-                      label={t('admin.storages.egressBillingCredits')}
-                      error={form.formState.errors.egressCreditPerUnit?.message}
-                    >
-                      <Input type="number" min={1} step={1} {...form.register('egressCreditPerUnit')} />
-                    </FormField>
-                  </div>
-                )}
-              </div>
-            </div>
+      <AdminFormField
+        id="storage-secret-key"
+        label={t('admin.storages.fieldSecretKey')}
+        required
+        error={form.formState.errors.secretKey?.message}
+      >
+        {(controlProps) => (
+          <div className="relative">
+            <Input
+              {...form.register('secretKey')}
+              {...controlProps}
+              type={showSecret ? 'text' : 'password'}
+              placeholder={t('admin.storages.secretKeyPlaceholder')}
+              className="pr-10"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={showSecret ? t('admin.storages.hideSecretKey') : t('admin.storages.showSecretKey')}
+              className="absolute right-2 top-1/2 -translate-y-1/2"
+              onClick={() => setShowSecret((v) => !v)}
+            >
+              {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </Button>
           </div>
+        )}
+      </AdminFormField>
 
-          <SheetFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? t('common.loading') : t('common.save')}
-            </Button>
-          </SheetFooter>
-        </form>
-      </SheetContent>
-    </Sheet>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <AdminFormLabel htmlFor="forcePathStyle" help={t('admin.storages.forcePathStyleHint')}>
+            {t('admin.storages.fieldForcePathStyle')}
+          </AdminFormLabel>
+        </div>
+        <Switch
+          id="forcePathStyle"
+          className="mt-0.5"
+          checked={forcePathStyle}
+          onCheckedChange={(checked) => form.setValue('forcePathStyle', checked)}
+        />
+      </div>
+
+      <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <p className="font-medium text-sm">{t('admin.storages.previewTitle')}</p>
+          {preview && (
+            <span className="shrink-0 text-muted-foreground text-xs">
+              {t(
+                preview.addressingMode === 'path'
+                  ? 'admin.storages.previewPathStyle'
+                  : 'admin.storages.previewVirtualHostedStyle',
+              )}
+            </span>
+          )}
+        </div>
+        {preview ? (
+          <div className="space-y-2">
+            <div className="space-y-1">
+              <p className="text-muted-foreground text-xs">{t('admin.storages.previewRequestUrl')}</p>
+              <code className="block break-all rounded-sm bg-background px-2 py-1.5 text-xs">{preview.requestUrl}</code>
+            </div>
+            <p className="text-muted-foreground text-xs">
+              {t('admin.storages.previewSigningRegion', { region: preview.signingRegion })}
+            </p>
+          </div>
+        ) : (
+          <p className="text-muted-foreground text-sm">{t('admin.storages.previewEmpty')}</p>
+        )}
+      </div>
+    </AdminFormDrawer>
   )
 }
 
-function FormField({ label, error, children }: { label: string; error?: string; children: ReactNode }) {
+type StoragePreviewInput = Pick<StorageFormValues, 'bucket' | 'endpoint' | 'region' | 'forcePathStyle'>
+
+function buildStoragePreview({ bucket, endpoint, region, forcePathStyle }: StoragePreviewInput) {
+  const normalizedBucket = bucket.trim()
+  const normalizedEndpoint = endpoint.trim()
+  if (!normalizedBucket || !normalizedEndpoint) return null
+
+  let url: URL
+  try {
+    url = new URL(normalizedEndpoint)
+  } catch {
+    return null
+  }
+
+  url.search = ''
+  url.hash = ''
+
+  const endpointPath = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '')
+  const shouldUsePathStyle = forcePathStyle || isIpAddress(url.hostname)
+  if (shouldUsePathStyle) {
+    url.pathname = joinPath(endpointPath, normalizedBucket, PREVIEW_OBJECT_KEY)
+    const requestUrl = url.toString()
+    return {
+      requestUrl,
+      addressingMode: 'path' as const,
+      signingRegion: region.trim() || 'auto',
+    }
+  }
+
+  url.hostname = `${normalizedBucket}.${url.hostname}`
+  url.pathname = joinPath(endpointPath, PREVIEW_OBJECT_KEY)
+  const requestUrl = url.toString()
+  return {
+    requestUrl,
+    addressingMode: 'virtual-hosted' as const,
+    signingRegion: region.trim() || 'auto',
+  }
+}
+
+function joinPath(...parts: string[]): string {
+  const path = parts
+    .map((part) => part.replace(/^\/+|\/+$/g, ''))
+    .filter(Boolean)
+    .join('/')
+  return `/${path}`
+}
+
+function isIpAddress(hostname: string): boolean {
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname) || hostname.includes(':')
+}
+
+type FreeInputDropdownOption = {
+  value: string
+  label?: string
+  description?: string
+}
+
+interface FreeInputDropdownProps extends Omit<ComponentProps<typeof Input>, 'value' | 'onChange'> {
+  value: string
+  options: FreeInputDropdownOption[]
+  onValueChange: (value: string) => void
+  onOptionSelect?: (value: string) => void
+}
+
+const FreeInputDropdown = forwardRef<HTMLInputElement, FreeInputDropdownProps>(function FreeInputDropdown(
+  { value, options, onValueChange, onOptionSelect, onFocus, onBlur, onKeyDown, ...inputProps },
+  ref,
+) {
+  const [open, setOpen] = useState(false)
+  const filteredOptions = useMemo(() => {
+    const query = value.trim().toLowerCase()
+    const exactMatch = options.some((option) =>
+      [option.value, option.label].some((part) => part?.toLowerCase() === query),
+    )
+    const filtered =
+      query && !exactMatch
+        ? options.filter((option) =>
+            [option.value, option.label, option.description].some((part) => part?.toLowerCase().includes(query)),
+          )
+        : options
+    return filtered.slice(0, 80)
+  }, [options, value])
+  const showOptions = open && filteredOptions.length > 0
+
   return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      {children}
-      {error && <p className="text-xs text-destructive">{error}</p>}
+    <div className="relative">
+      <Input
+        {...inputProps}
+        ref={ref}
+        value={value}
+        autoComplete="off"
+        role={options.length > 0 ? 'combobox' : undefined}
+        aria-expanded={options.length > 0 ? showOptions : undefined}
+        onFocus={(event) => {
+          setOpen(true)
+          onFocus?.(event)
+        }}
+        onBlur={(event) => {
+          window.setTimeout(() => setOpen(false), 100)
+          onBlur?.(event)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') setOpen(false)
+          onKeyDown?.(event)
+        }}
+        onChange={(event) => {
+          onValueChange(event.target.value)
+          setOpen(true)
+        }}
+      />
+      {showOptions && (
+        <div
+          role="listbox"
+          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-56 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+        >
+          {filteredOptions.map((option) => (
+            <button
+              type="button"
+              role="option"
+              key={`${option.value}:${option.description ?? ''}`}
+              className="flex w-full min-w-0 items-center justify-between gap-3 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                if (onOptionSelect) {
+                  onOptionSelect(option.value)
+                } else {
+                  onValueChange(option.value)
+                }
+                setOpen(false)
+              }}
+            >
+              <span className="min-w-0 truncate">{option.label ?? option.value}</span>
+              {option.description && (
+                <span className="shrink-0 text-muted-foreground text-xs">{option.description}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
-}
+})

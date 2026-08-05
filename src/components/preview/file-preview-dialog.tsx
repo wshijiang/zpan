@@ -7,6 +7,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { getPreviewType, type PreviewType } from '@/lib/file-types'
+import { formatSize } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { FilePreviewContent, PreviewDownloadButton, type PreviewFile } from './file-preview-content'
 import { ImagePreview } from './image-preview'
@@ -24,14 +25,6 @@ interface PreviewPanelProps {
   onOpenChange: (open: boolean) => void
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  const value = bytes / 1024 ** i
-  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
-}
-
 function dialogClass(previewType: PreviewType, fullscreen: boolean): string {
   if (fullscreen) {
     return 'h-[100dvh] w-[100dvw] max-w-none rounded-none border-0 sm:max-w-none'
@@ -47,6 +40,7 @@ function dialogClass(previewType: PreviewType, fullscreen: boolean): string {
     case 'markdown':
     case 'code':
     case 'text':
+    case 'nfo':
       return 'max-w-5xl h-[85vh]'
     default:
       return 'max-w-3xl h-[75vh]'
@@ -74,7 +68,7 @@ function PreviewHeader({
     <div className="flex items-center justify-between border-b px-4 py-3">
       <div className="min-w-0 flex-1">
         <p className={cn('truncate font-medium', compact ? 'text-sm' : 'text-base')}>{file.name}</p>
-        <p className="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
+        <p className="text-xs text-muted-foreground">{formatSize(file.size)}</p>
       </div>
       <div className="flex shrink-0 items-center gap-1 pl-2">
         <PreviewDownloadButton url={file.downloadUrl} filename={file.name} compact={compact} />

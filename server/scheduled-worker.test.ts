@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { syncPendingCloudTrafficReports } from '../server/services/cloud-traffic-metering'
-import { resetExpiredTrafficQuotas } from '../server/services/effective-quota'
-import { INSTANCE_TELEMETRY_CRON, reportInstanceTelemetry } from '../server/services/instance-telemetry'
-import { runLicensingRefresh } from '../server/services/licensing-refresh-runner'
-import { syncPendingRemoteDownloadUsageReports } from '../server/services/remote-download-usage'
+import { syncPendingRemoteDownloadUsageReports } from '../server/usecases/downloads/remote-download-usage'
+import { reconcileImageDomains } from '../server/usecases/site/image-domain-provider'
+import { INSTANCE_TELEMETRY_CRON, reportInstanceTelemetry } from '../server/usecases/site/instance-telemetry'
+import { runLicensingRefresh } from '../server/usecases/site/licensing'
+import { syncPendingCloudTrafficReports } from '../server/usecases/store/traffic-metering'
 import { handleScheduled } from '../workers/scheduled'
 
 vi.mock('../server/platform/cloudflare', () => ({
@@ -12,24 +12,52 @@ vi.mock('../server/platform/cloudflare', () => ({
   }),
 }))
 
-vi.mock('../server/services/cloud-traffic-metering', () => ({
+const refreshHourlyRollups = vi.fn()
+const purgeExpiredLocks = vi.fn()
+const reconcileFreePlanBaselines = vi.fn()
+const purgeResourceChanges = vi.fn()
+const fakeDeps = {
+  instance: 'instance',
+  systemOptions: 'system-options',
+  adminStats: { refreshHourlyRollups },
+  webdavState: { purgeExpiredLocks },
+  quota: { reconcileFreePlanBaselines },
+  resourceChanges: { purgeBefore: purgeResourceChanges },
+}
+vi.mock('../server/composition', () => ({
+  createDeps: vi.fn(() => fakeDeps),
+}))
+
+vi.mock('../server/usecases/store/traffic-metering', () => ({
   syncPendingCloudTrafficReports: vi.fn(),
 }))
 
-vi.mock('../server/services/effective-quota', () => ({
-  resetExpiredTrafficQuotas: vi.fn(),
+const { mockCreateQuotaRepo, mockResetExpiredTrafficQuotas } = vi.hoisted(() => {
+  const resetExpiredTrafficQuotas = vi.fn()
+  return {
+    mockResetExpiredTrafficQuotas: resetExpiredTrafficQuotas,
+    mockCreateQuotaRepo: vi.fn(() => ({ resetExpiredTrafficQuotas })),
+  }
+})
+
+vi.mock('../server/adapters/repos/quota', () => ({
+  createQuotaRepo: mockCreateQuotaRepo,
 }))
 
-vi.mock('../server/services/instance-telemetry', () => ({
+vi.mock('../server/usecases/site/instance-telemetry', () => ({
   INSTANCE_TELEMETRY_CRON: '0 */12 * * *',
   reportInstanceTelemetry: vi.fn(),
 }))
 
-vi.mock('../server/services/licensing-refresh-runner', () => ({
+vi.mock('../server/usecases/site/licensing', () => ({
   runLicensingRefresh: vi.fn(),
 }))
 
-vi.mock('../server/services/remote-download-usage', () => ({
+vi.mock('../server/usecases/site/image-domain-provider', () => ({
+  reconcileImageDomains: vi.fn(),
+}))
+
+vi.mock('../server/usecases/downloads/remote-download-usage', () => ({
   syncPendingRemoteDownloadUsageReports: vi.fn(),
 }))
 
@@ -39,25 +67,44 @@ describe('handleScheduled', () => {
     vi.mocked(syncPendingRemoteDownloadUsageReports).mockReset()
     vi.mocked(reportInstanceTelemetry).mockReset()
     vi.mocked(runLicensingRefresh).mockReset()
-    vi.mocked(resetExpiredTrafficQuotas).mockReset()
+    vi.mocked(reconcileImageDomains).mockReset()
+    mockResetExpiredTrafficQuotas.mockReset()
+    refreshHourlyRollups.mockReset()
+    purgeExpiredLocks.mockReset()
+    reconcileFreePlanBaselines.mockReset()
+    purgeResourceChanges.mockReset()
   })
 
   it('syncs usage reports on the traffic cron only', async () => {
     await handleScheduled({ cron: '*/10 * * * *' }, { DB: {} as D1Database, ZPAN_CLOUD_URL: 'https://cloud.example' })
 
-    expect(syncPendingCloudTrafficReports).toHaveBeenCalledWith({ db: 'db', cloudBaseUrl: 'https://cloud.example' })
-    expect(syncPendingRemoteDownloadUsageReports).toHaveBeenCalledWith({
-      db: 'db',
+    expect(syncPendingCloudTrafficReports).toHaveBeenCalledWith(fakeDeps, { cloudBaseUrl: 'https://cloud.example' })
+    expect(syncPendingRemoteDownloadUsageReports).toHaveBeenCalledWith(fakeDeps, {
       cloudBaseUrl: 'https://cloud.example',
     })
+    expect(refreshHourlyRollups).not.toHaveBeenCalled()
+    expect(reconcileFreePlanBaselines).toHaveBeenCalledOnce()
     expect(runLicensingRefresh).not.toHaveBeenCalled()
     expect(reportInstanceTelemetry).not.toHaveBeenCalled()
+  })
+
+  it('refreshes hourly rollups on the dedicated stats cron only', async () => {
+    await handleScheduled({ cron: '10 * * * *' }, { DB: {} as D1Database })
+
+    expect(refreshHourlyRollups).toHaveBeenCalledOnce()
+    expect(purgeExpiredLocks).toHaveBeenCalledOnce()
+    expect(purgeResourceChanges).toHaveBeenCalledOnce()
+    expect(reconcileImageDomains).toHaveBeenCalledWith(fakeDeps)
+    expect(reconcileFreePlanBaselines).not.toHaveBeenCalled()
+    expect(syncPendingCloudTrafficReports).not.toHaveBeenCalled()
+    expect(syncPendingRemoteDownloadUsageReports).not.toHaveBeenCalled()
+    expect(runLicensingRefresh).not.toHaveBeenCalled()
   })
 
   it('refreshes licensing on the licensing cron only', async () => {
     await handleScheduled({ cron: '0 */6 * * *' }, { DB: {} as D1Database, ZPAN_CLOUD_URL: 'https://cloud.example' })
 
-    expect(runLicensingRefresh).toHaveBeenCalledWith('db', 'https://cloud.example')
+    expect(runLicensingRefresh).toHaveBeenCalledWith(fakeDeps, 'https://cloud.example')
     expect(syncPendingCloudTrafficReports).not.toHaveBeenCalled()
     expect(syncPendingRemoteDownloadUsageReports).not.toHaveBeenCalled()
     expect(reportInstanceTelemetry).not.toHaveBeenCalled()
@@ -66,7 +113,8 @@ describe('handleScheduled', () => {
   it('resets expired traffic quotas on the monthly reset cron only', async () => {
     await handleScheduled({ cron: '0 0 1 * *' }, { DB: {} as D1Database, ZPAN_CLOUD_URL: 'https://cloud.example' })
 
-    expect(resetExpiredTrafficQuotas).toHaveBeenCalledWith('db')
+    expect(mockResetExpiredTrafficQuotas).toHaveBeenCalled()
+    expect(mockCreateQuotaRepo).toHaveBeenCalledWith('db')
     expect(runLicensingRefresh).not.toHaveBeenCalled()
     expect(syncPendingCloudTrafficReports).not.toHaveBeenCalled()
     expect(syncPendingRemoteDownloadUsageReports).not.toHaveBeenCalled()
@@ -83,8 +131,7 @@ describe('handleScheduled', () => {
     )
 
     expect(reportInstanceTelemetry).toHaveBeenCalledTimes(1)
-    expect(reportInstanceTelemetry).toHaveBeenCalledWith({
-      db: 'db',
+    expect(reportInstanceTelemetry).toHaveBeenCalledWith(fakeDeps, {
       config: {
         allowIp: true,
       },

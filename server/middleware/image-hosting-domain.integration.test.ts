@@ -1,7 +1,8 @@
 import { sql } from 'drizzle-orm'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { currentTrafficPeriod } from '../services/effective-quota'
-import { S3Service } from '../services/s3'
+import { generateImageToken } from '../../shared/ids'
+import { S3Service } from '../adapters/gateways/s3'
+import { currentTrafficPeriod } from '../domain/quota'
 import { authedHeaders, createTestApp } from '../test/setup'
 
 const MOCK_INLINE_URL = 'https://presigned-inline.example.com/image.png'
@@ -21,8 +22,8 @@ async function getOrgId(db: TestDb): Promise<string> {
 async function insertStorage(db: TestDb) {
   const now = Date.now()
   await db.run(sql`
-    INSERT OR IGNORE INTO storages (id, title, mode, bucket, endpoint, region, access_key, secret_key, file_path, custom_host, capacity, used, status, created_at, updated_at)
-    VALUES (${STORAGE_ID}, 'Test S3', 'private', 'test-bucket', 'https://s3.amazonaws.com', 'us-east-1', 'AK', 'SK', '', '', 0, 0, 'active', ${now}, ${now})
+    INSERT OR IGNORE INTO storages (id, bucket, endpoint, region, access_key, secret_key, file_path, custom_host, capacity, used, status, created_at, updated_at)
+    VALUES (${STORAGE_ID}, 'test-bucket', 'https://s3.amazonaws.com', 'us-east-1', 'AK', 'SK', '', '', 0, 0, 'active', ${now}, ${now})
   `)
 }
 
@@ -48,7 +49,7 @@ async function insertImageHosting(db: TestDb, orgId: string, opts: { id: string;
   const now = Date.now()
   await db.run(sql`
     INSERT INTO image_hostings (id, org_id, token, path, storage_id, storage_key, size, mime, status, access_count, created_at)
-    VALUES (${opts.id}, ${orgId}, ${`ih_${opts.id}`}, ${opts.path}, ${STORAGE_ID}, ${`ih/${orgId}/${opts.id}.png`}, 1024, 'image/png', ${opts.status ?? 'active'}, 0, ${now})
+    VALUES (${opts.id}, ${orgId}, ${generateImageToken()}, ${opts.path}, ${STORAGE_ID}, ${`ih/${orgId}/${opts.id}.png`}, 1024, 'image/png', ${opts.status ?? 'active'}, 0, ${now})
   `)
 }
 
@@ -86,15 +87,17 @@ beforeEach(() => {
 
 describe('imageHostingDomain middleware — app-host passthrough', () => {
   it('default app host → next(), normal routing works', async () => {
-    const { app } = await createTestApp({ PUBLIC_APP_HOST: 'zpan.example.com' })
+    const { app, deps } = await createTestApp()
+    await deps.systemOptions.set('site_public_origin', 'https://zpan.example.com')
     const res = await app.request('/api/health', {
       headers: { host: 'zpan.example.com' },
     })
     expect(res.status).toBe(200)
   })
 
-  it('subdomain of app host → next()', async () => {
-    const { app } = await createTestApp({ PUBLIC_APP_HOST: 'zpan.example.com' })
+  it('unclaimed subdomain of app host → next()', async () => {
+    const { app, deps } = await createTestApp()
+    await deps.systemOptions.set('site_public_origin', 'https://zpan.example.com')
     const res = await app.request('/api/health', {
       headers: { host: 'sub.zpan.example.com' },
     })
@@ -106,6 +109,13 @@ describe('imageHostingDomain middleware — app-host passthrough', () => {
     const res = await app.request('/api/health', {
       headers: { host: 'myproject.workers.dev' },
     })
+    expect(res.status).toBe(200)
+  })
+
+  it('configured WebDAV host → next(), normal routing works', async () => {
+    const { app, deps } = await createTestApp()
+    await deps.systemOptions.set('site_public_origin', 'https://example.com')
+    const res = await app.request('https://dav.example.com/api/health')
     expect(res.status).toBe(200)
   })
 
@@ -122,8 +132,8 @@ describe('imageHostingDomain middleware — app-host passthrough', () => {
     const res = await app.request('/api/health', {
       headers: { host: 'unknown.external.com' },
     })
-    // no DB entry → next() → /api/health returns 200
     expect(res.status).toBe(200)
+    expect(res.headers.get('Server-Timing')).not.toContain('image-domain')
   })
 })
 
@@ -151,6 +161,41 @@ describe('imageHostingDomain middleware — unverified domain', () => {
 // ─── Custom domain redirect ───────────────────────────────────────────────────
 
 describe('imageHostingDomain middleware — custom domain redirect', () => {
+  it('reserves application paths even when a custom domain has a matching image path', async () => {
+    const { app, db } = await createTestApp()
+    await authedHeaders(app)
+    await insertStorage(db)
+    const orgId = await getOrgId(db)
+    await insertImageHosting(db, orgId, { id: 'reserved-api-image', path: 'api/health' })
+    await insertImageHostingConfig(db, orgId, { customDomain: 'img.reserved.com' })
+
+    const res = await app.request('/api/health', {
+      headers: { host: 'img.reserved.com' },
+      redirect: 'manual',
+    })
+
+    expect(res.status).toBe(200)
+    expect(await getAccessCount(db, 'reserved-api-image')).toBe(0)
+    expect(res.headers.get('Server-Timing')).not.toContain('image-domain')
+  })
+
+  it('only reserves the exact WebDAV hostname, not its subdomains', async () => {
+    const { app, db, deps } = await createTestApp()
+    await deps.systemOptions.set('site_public_origin', 'https://example.com')
+    await authedHeaders(app)
+    await insertStorage(db)
+    const orgId = await getOrgId(db)
+    await insertImageHosting(db, orgId, { id: 'dav-subdomain-image', path: 'image.png' })
+    await insertImageHostingConfig(db, orgId, { customDomain: 'img.dav.example.com' })
+
+    const res = await app.request('/image.png', {
+      headers: { host: 'img.dav.example.com' },
+      redirect: 'manual',
+    })
+    expect(res.status).toBe(302)
+    expect(res.headers.get('location')).toBe(MOCK_INLINE_URL)
+  })
+
   it('verified custom domain with valid path returns non-cacheable metered redirect', async () => {
     const { app, db } = await createTestApp()
     await authedHeaders(app)
@@ -166,6 +211,41 @@ describe('imageHostingDomain middleware — custom domain redirect', () => {
     expect(res.status).toBe(302)
     expect(res.headers.get('location')).toBe(MOCK_INLINE_URL)
     expect(res.headers.get('cache-control')).toBe('no-store')
+    const events = await db.all<{ actorType: string; bytes: number; source: string; trafficEventId: string }>(sql`
+      SELECT
+        actor_type AS actorType,
+        json_extract(metadata, '$.bytes') AS bytes,
+        json_extract(metadata, '$.source') AS source,
+        json_extract(metadata, '$.trafficEventId') AS trafficEventId
+      FROM audit_events
+      WHERE action = 'image_hosting_download' AND target_id = 'dm-img1'
+    `)
+    expect(events).toEqual([
+      {
+        actorType: 'anonymous',
+        bytes: 1024,
+        source: 'custom_domain_image',
+        trafficEventId: expect.any(String),
+      },
+    ])
+  })
+
+  it('strips the internal /ih rewrite prefix before resolving an image path', async () => {
+    const { app, db } = await createTestApp()
+    await authedHeaders(app)
+    await insertStorage(db)
+    const orgId = await getOrgId(db)
+    await insertImageHosting(db, orgId, { id: 'dm-rewritten', path: '中文/图片.png' })
+    await insertImageHostingConfig(db, orgId, { customDomain: 'img.rewrite.com' })
+
+    const res = await app.request('/ih/%E4%B8%AD%E6%96%87/%E5%9B%BE%E7%89%87.png', {
+      headers: { host: 'img.rewrite.com' },
+      redirect: 'manual',
+    })
+
+    expect(res.status).toBe(302)
+    expect(res.headers.get('location')).toBe(MOCK_INLINE_URL)
+    expect(await getAccessCount(db, 'dm-rewritten')).toBe(1)
   })
 
   it('verified custom domain consumes traffic quota when inline URL is issued', async () => {
@@ -215,9 +295,20 @@ describe('imageHostingDomain middleware — custom domain redirect', () => {
       redirect: 'manual',
     })
     expect(res.status).toBe(422)
-    await expect(res.json()).resolves.toEqual({ error: 'Traffic quota exceeded' })
+    const quotaBody = (await res.json()) as {
+      error: { message: string; status: string; details: { reason: string }[] }
+    }
+    expect(quotaBody.error.message).toBe('Traffic quota exceeded')
+    expect(quotaBody.error.status).toBe('RESOURCE_EXHAUSTED')
+    expect(quotaBody.error.details[0].reason).toBe('QUOTA_EXCEEDED')
     expect(S3Service.prototype.presignInline).not.toHaveBeenCalled()
     expect(await getAccessCount(db, 'dm-quota-over')).toBe(0)
+    const failures = await db.all<{ reason: string; source: string }>(sql`
+      SELECT json_extract(metadata, '$.reason') AS reason, json_extract(metadata, '$.source') AS source
+      FROM audit_events
+      WHERE action = 'download_failed' AND target_id = 'dm-quota-over'
+    `)
+    expect(failures).toEqual([{ reason: 'quota_exceeded', source: 'custom_domain_image' }])
   })
 
   it('verified custom domain refunds traffic when inline URL signing fails', async () => {
@@ -249,7 +340,7 @@ describe('imageHostingDomain middleware — custom domain redirect', () => {
     expect(await getAccessCount(db, 'dm-sign-fail')).toBe(0)
   })
 
-  it('verified custom domain, path not found → 404', async () => {
+  it('verified custom domain, path not found → English HTML 404 for direct navigation', async () => {
     const { app, db } = await createTestApp()
     await authedHeaders(app)
     await insertStorage(db)
@@ -261,6 +352,37 @@ describe('imageHostingDomain middleware — custom domain redirect', () => {
       redirect: 'manual',
     })
     expect(res.status).toBe(404)
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8')
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(res.headers.get('x-robots-tag')).toBe('noindex, nofollow')
+    const body = await res.text()
+    expect(body).toContain('<html lang="en">')
+    expect(body).toContain('Image not found')
+    expect(body).toContain('The image does not exist or has been removed.')
+  })
+
+  it('verified custom domain, path not found → Chinese SVG 404 for embedded images', async () => {
+    const { app, db } = await createTestApp()
+    await authedHeaders(app)
+    await insertStorage(db)
+    const orgId = await getOrgId(db)
+    await insertImageHostingConfig(db, orgId, { customDomain: 'img.missing-zh.com' })
+
+    const res = await app.request('/blog/notexist.png', {
+      headers: {
+        host: 'img.missing-zh.com',
+        Accept: 'image/avif,image/webp,image/svg+xml,image/*,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      },
+      redirect: 'manual',
+    })
+    expect(res.status).toBe(404)
+    expect(res.headers.get('content-type')).toBe('image/svg+xml; charset=utf-8')
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    const body = await res.text()
+    expect(body).toContain('<svg')
+    expect(body).toContain('图片不存在')
+    expect(body).toContain('这张图片不存在或已被删除。')
   })
 
   it('host with port suffix still matches', async () => {
@@ -293,7 +415,7 @@ describe('imageHostingDomain middleware — custom domain redirect', () => {
     expect(res.status).toBe(302)
   })
 
-  it('empty path (root /) → 404 with path required error', async () => {
+  it('empty path (root /) → image-hosting HTML 404', async () => {
     const { app, db } = await createTestApp()
     await authedHeaders(app)
     await insertStorage(db)
@@ -304,8 +426,8 @@ describe('imageHostingDomain middleware — custom domain redirect', () => {
       headers: { host: 'img.empty.com' },
     })
     expect(res.status).toBe(404)
-    const body = (await res.json()) as { error: string }
-    expect(body.error).toBe('path required')
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8')
+    expect(await res.text()).toContain('Image not found')
   })
 })
 
@@ -328,8 +450,8 @@ describe('imageHostingDomain middleware — referer allowlist', () => {
       redirect: 'manual',
     })
     expect(res.status).toBe(403)
-    const body = (await res.json()) as { error: string }
-    expect(body.error).toBe('forbidden referer')
+    const body = (await res.json()) as { error: { message: string } }
+    expect(body.error.message).toBe('forbidden referer')
   })
 
   it('referer allowlist allows matching origin → 302', async () => {

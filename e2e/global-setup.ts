@@ -3,40 +3,35 @@
  * The webServer is already running when this executes.
  * Ensures an admin user and a storage backend exist.
  */
-import { request as playwrightRequest, test as setup } from '@playwright/test'
+import { expect, request as playwrightRequest, test as setup } from '@playwright/test'
 import Database from 'better-sqlite3'
 import { hashPassword } from '../server/lib/password'
+import { generateId } from '../shared/ids'
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from './helpers'
 
 const localBaseUrl = process.env.E2E_LOCAL_BASE_URL ?? 'http://localhost:5185'
+const publicBaseUrl = process.env.E2E_PUBLIC_BASE_URL ?? process.env.E2E_BASE_URL ?? localBaseUrl
 const defaultOrgQuota = process.env.E2E_DEFAULT_ORG_QUOTA ?? String(1024 * 1024 * 1024)
 
 const storageConfig = {
-  title: 'E2E Storage',
-  mode: 'private',
   bucket: process.env.E2E_STORAGE_BUCKET ?? 'e2e-test',
   endpoint: process.env.E2E_STORAGE_ENDPOINT ?? 'https://localhost:9000',
   region: process.env.E2E_STORAGE_REGION ?? 'auto',
   accessKey: process.env.E2E_STORAGE_ACCESS_KEY ?? 'e2e-access-key',
   secretKey: process.env.E2E_STORAGE_SECRET_KEY ?? 'e2e-secret-key',
   capacity: 0,
-  status: 'active',
+  enabled: true,
 }
 
 type StorageItem = {
   id: string
-  mode: string
   capacity: number
   used: number
-  status: string
+  enabled: boolean
 }
 
-function isAvailablePrivateStorage(storage: StorageItem) {
-  return (
-    storage.mode === 'private' &&
-    storage.status === 'active' &&
-    (storage.capacity === 0 || storage.used < storage.capacity)
-  )
+function isAvailableStorage(storage: StorageItem) {
+  return storage.enabled && (storage.capacity === 0 || storage.used < storage.capacity)
 }
 
 function prepareNodeDatabase() {
@@ -49,9 +44,9 @@ function prepareNodeDatabase() {
   sqlite
     .prepare(
       `
-        INSERT INTO system_options (key, value, public)
-        VALUES ('auth_signup_mode', '', 1)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value, public = excluded.public
+        INSERT INTO system_options (key, value)
+        VALUES ('auth_signup_mode', '')
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
       `,
     )
     .run()
@@ -59,9 +54,9 @@ function prepareNodeDatabase() {
   sqlite
     .prepare(
       `
-        INSERT INTO system_options (key, value, public)
-        VALUES ('cloud_store_enabled', 'true', 0)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value, public = excluded.public
+        INSERT INTO system_options (key, value)
+        VALUES ('cloud_store_enabled', 'true')
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
       `,
     )
     .run()
@@ -69,8 +64,8 @@ function prepareNodeDatabase() {
   sqlite
     .prepare(
       `
-        INSERT INTO system_options (key, value, public)
-        VALUES (?, ?, 0), (?, ?, 0), (?, ?, 0)
+        INSERT INTO system_options (key, value)
+        VALUES (?, ?), (?, ?), (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
       `,
     )
@@ -115,7 +110,7 @@ function ensureNodeStorage() {
   const storage = sqlite
     .prepare(
       `
-        SELECT id, mode, capacity, used, status
+        SELECT id, capacity, used, enabled
         FROM storages
         ORDER BY created_at ASC
         LIMIT 1
@@ -127,22 +122,21 @@ function ensureNodeStorage() {
     sqlite
       .prepare(
         `
-          UPDATE storages
-          SET title = ?, mode = ?, bucket = ?, endpoint = ?, region = ?, access_key = ?, secret_key = ?,
-              capacity = ?, status = ?, updated_at = CAST(unixepoch('subsecond') * 1000 AS INTEGER)
+        UPDATE storages
+          SET bucket = ?, endpoint = ?, region = ?, access_key = ?, secret_key = ?,
+              capacity = ?, enabled = ?, status = 'unknown', status_reason = NULL,
+              status_checked_at = NULL, updated_at = CAST(unixepoch('subsecond') * 1000 AS INTEGER)
           WHERE id = ?
         `,
       )
       .run(
-        storageConfig.title,
-        storageConfig.mode,
         storageConfig.bucket,
         storageConfig.endpoint,
         storageConfig.region,
         storageConfig.accessKey,
         storageConfig.secretKey,
         storageConfig.capacity,
-        storageConfig.status,
+        Number(storageConfig.enabled),
         storage.id,
       )
     sqlite.close()
@@ -153,23 +147,21 @@ function ensureNodeStorage() {
     .prepare(
       `
         INSERT INTO storages (
-          id, title, mode, bucket, endpoint, region, access_key, secret_key,
-          file_path, custom_host, capacity, used, status, created_at, updated_at
+          id, bucket, endpoint, region, access_key, secret_key,
+          file_path, custom_host, capacity, used, enabled, status, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, 0, ?, CAST(unixepoch('subsecond') * 1000 AS INTEGER), CAST(unixepoch('subsecond') * 1000 AS INTEGER))
+        VALUES (?, ?, ?, ?, ?, ?, '', '', ?, 0, ?, 'unknown', CAST(unixepoch('subsecond') * 1000 AS INTEGER), CAST(unixepoch('subsecond') * 1000 AS INTEGER))
       `,
     )
     .run(
-      crypto.randomUUID(),
-      storageConfig.title,
-      storageConfig.mode,
+      generateId(),
       storageConfig.bucket,
       storageConfig.endpoint,
       storageConfig.region,
       storageConfig.accessKey,
       storageConfig.secretKey,
       storageConfig.capacity,
-      storageConfig.status,
+      Number(storageConfig.enabled),
     )
   sqlite.close()
   return true
@@ -179,6 +171,7 @@ setup('seed admin and storage', async () => {
   const request = await playwrightRequest.newContext({ baseURL: localBaseUrl })
   const headers = { Origin: localBaseUrl }
   try {
+    await expectPublicCallbackReady()
     prepareNodeDatabase()
 
     let authResp = await request.post('/api/auth/sign-in/email', {
@@ -202,9 +195,23 @@ setup('seed admin and storage', async () => {
       }
     }
 
-    const quotaResp = await request.put('/api/system/options/default_org_quota', {
+    const identityResp = await request.put('/api/site/settings/identity', {
       headers,
-      data: { value: defaultOrgQuota },
+      data: {
+        name: 'ZPan',
+        description: '',
+        publicUrl: publicBaseUrl,
+      },
+    })
+    if (!identityResp.ok()) throw new Error(`could not set E2E public URL: ${identityResp.status()}`)
+
+    const quotaResp = await request.put('/api/site/settings/quotas', {
+      headers,
+      data: {
+        defaultOrgBytes: Number(defaultOrgQuota),
+        defaultTeamBytes: Number(defaultOrgQuota),
+        defaultMonthlyTrafficBytes: 0,
+      },
     })
     if (!quotaResp.ok()) throw new Error(`could not set E2E default quota: ${quotaResp.status()}`)
 
@@ -214,15 +221,15 @@ setup('seed admin and storage', async () => {
     // local test environment into OPEN mode so existing dev DB settings do not
     // make the suite depend on invite codes.
     // Check if storage already exists
-    const list = await request.get('/api/admin/storages', { headers })
+    const list = await request.get('/api/site/storages', { headers })
     if (list.ok()) {
       const data = (await list.json()) as { items?: StorageItem[] }
       const storages = data.items ?? []
-      if (storages.some(isAvailablePrivateStorage)) return
+      if (storages.some(isAvailableStorage)) return
 
       const existing = storages[0]
       if (existing) {
-        const resp = await request.put(`/api/admin/storages/${existing.id}`, {
+        const resp = await request.patch(`/api/site/storages/${existing.id}`, {
           headers,
           data: storageConfig,
         })
@@ -232,7 +239,7 @@ setup('seed admin and storage', async () => {
     }
 
     // Seed storage
-    const storageResp = await request.post('/api/admin/storages', {
+    const storageResp = await request.post('/api/site/storages', {
       headers,
       data: storageConfig,
     })
@@ -241,3 +248,21 @@ setup('seed admin and storage', async () => {
     await request.dispose()
   }
 })
+
+async function expectPublicCallbackReady() {
+  if (publicBaseUrl === localBaseUrl) return
+  const request = await playwrightRequest.newContext({ baseURL: publicBaseUrl })
+  try {
+    await expect
+      .poll(
+        async () => {
+          const response = await request.get('/api/health')
+          return response.ok() ? ((await response.json()) as { status?: string }).status : await response.text()
+        },
+        { message: `public callback URL did not become ready: ${publicBaseUrl}`, timeout: 60_000 },
+      )
+      .toBe('ok')
+  } finally {
+    await request.dispose()
+  }
+}

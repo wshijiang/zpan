@@ -1,5 +1,5 @@
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ChevronsUpDown, Languages, LogOut, Palette, Settings, ShieldCheck, Users } from 'lucide-react'
+import { ChevronsUpDown, Languages, LogOut, Palette, Settings, ShieldCheck, UserRound } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { useTranslation } from 'react-i18next'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -17,15 +17,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { SidebarMenuButton } from '@/components/ui/sidebar'
 import { signOut, useSession } from '@/lib/auth-client'
-
-function getInitials(name: string): string {
-  return name
-    .split(' ')
-    .map((n) => n[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2)
-}
+import { getInitials } from '@/lib/format'
 
 export function UserAccountMenu({
   showAdminLink = false,
@@ -51,7 +43,7 @@ export function UserAccountMenu({
       <DropdownMenuTrigger asChild>
         <SidebarMenuButton className="flex-1 data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
           <Avatar size="sm">
-            {user?.image && <AvatarImage src={user.image} alt={user.name || user.username || ''} />}
+            <AvatarImage src={user?.image ?? undefined} alt={user?.name || user?.username || ''} />
             <AvatarFallback className="bg-sidebar-primary text-sidebar-primary-foreground text-xs font-semibold">
               {user ? getInitials(user.name || user.username || '?') : '?'}
             </AvatarFallback>
@@ -61,21 +53,21 @@ export function UserAccountMenu({
         </SidebarMenuButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent side="right" align="end" className="w-56">
+        {showFrontendLinks && user?.username && (
+          <DropdownMenuItem asChild>
+            <Link to="/u/$username" params={{ username: user.username }}>
+              <UserRound className="mr-2 h-4 w-4" />
+              {t('nav.profile')}
+            </Link>
+          </DropdownMenuItem>
+        )}
         {showFrontendLinks && (
-          <>
-            <DropdownMenuItem asChild>
-              <Link to="/settings">
-                <Settings className="mr-2 h-4 w-4" />
-                {t('nav.settings')}
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link to="/teams">
-                <Users className="mr-2 h-4 w-4" />
-                {t('nav.teams')}
-              </Link>
-            </DropdownMenuItem>
-          </>
+          <DropdownMenuItem asChild>
+            <Link to="/settings">
+              <Settings className="mr-2 h-4 w-4" />
+              {t('nav.settings')}
+            </Link>
+          </DropdownMenuItem>
         )}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
@@ -107,7 +99,7 @@ export function UserAccountMenu({
         </DropdownMenuSub>
         {showAdminLink && isAdmin && (
           <DropdownMenuItem asChild>
-            <Link to="/admin/storages">
+            <Link to="/admin">
               <ShieldCheck className="mr-2 h-4 w-4" />
               {t('nav.adminPanel')}
             </Link>

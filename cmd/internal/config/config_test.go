@@ -19,6 +19,7 @@ func TestLoadParsesSeedPolicy(t *testing.T) {
 	v.Set("downloader.seed.duration", "30m")
 	v.Set("downloader.seed.cache_limit", "10GB")
 	v.Set("downloader.seed.ratio", 1.5)
+	v.Set("downloader.seed.max_concurrent", 7)
 
 	cfg, err := Load(v)
 	if err != nil {
@@ -26,6 +27,9 @@ func TestLoadParsesSeedPolicy(t *testing.T) {
 	}
 	if !cfg.SeedEnabled {
 		t.Fatal("expected seed policy to be enabled")
+	}
+	if cfg.SeedMaxConcurrent != 7 {
+		t.Fatalf("expected seed max_concurrent 7, got %d", cfg.SeedMaxConcurrent)
 	}
 	if cfg.SeedDuration != 30*time.Minute {
 		t.Fatalf("expected seed duration 30m, got %s", cfg.SeedDuration)
@@ -57,6 +61,9 @@ func TestLoadUsesSafeSeedDefaults(t *testing.T) {
 	}
 	if cfg.SeedCacheLimit != 10_000_000_000 {
 		t.Fatalf("expected default seed cache limit 10GB, got %d", cfg.SeedCacheLimit)
+	}
+	if cfg.SeedMaxConcurrent != 10 {
+		t.Fatalf("expected default seed max_concurrent 10, got %d", cfg.SeedMaxConcurrent)
 	}
 	if cfg.Token != "" {
 		t.Fatalf("expected missing token to be accepted for device login bootstrap, got %q", cfg.Token)
@@ -119,6 +126,7 @@ func TestLoadRejectsInvalidSeedPolicy(t *testing.T) {
 		{name: "duration", key: "downloader.seed.duration", value: "-1s"},
 		{name: "cache limit", key: "downloader.seed.cache_limit", value: "-1GB"},
 		{name: "ratio", key: "downloader.seed.ratio", value: "-1"},
+		{name: "max concurrent", key: "downloader.seed.max_concurrent", value: "-1"},
 	}
 
 	for _, tt := range tests {
@@ -210,6 +218,78 @@ func TestWriteConfigStoresGlobalTokenAndOmitsDefaultRuntimeBlocks(t *testing.T) 
 	if !strings.Contains(text, "  bt_listen_port: 51413") {
 		t.Fatalf("expected custom BT listen port, got:\n%s", text)
 	}
+}
+
+func TestConfigFormattingHelpers(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/xdg/data")
+	if got := defaultGeoIPDBPath("/home/me"); got != filepath.Join("/xdg/data", "zpan", "geoip.mmdb") {
+		t.Fatalf("unexpected xdg geoip path: %s", got)
+	}
+	t.Setenv("XDG_DATA_HOME", "")
+	if got := defaultGeoIPDBPath("/home/me"); got != filepath.Join("/home/me", ".local", "share", "zpan", "geoip.mmdb") {
+		t.Fatalf("unexpected default geoip path: %s", got)
+	}
+	if got := defaultStateDir(""); got != filepath.Join(".zpan", "downloader") {
+		t.Fatalf("unexpected empty-home state dir: %s", got)
+	}
+	if got := defaultStateDir("/home/me"); got != filepath.Join("/home/me", ".local", "state", "zpan", "downloader") {
+		t.Fatalf("unexpected state dir: %s", got)
+	}
+	if got := formatSeedCacheLimit(1234); got != "1234" {
+		t.Fatalf("unexpected seed cache limit: %s", got)
+	}
+	if got := formatDuration(0, "5s"); got != "5s" {
+		t.Fatalf("unexpected fallback duration: %s", got)
+	}
+	if got := formatDuration(time.Hour, "5s"); got != "1h" {
+		t.Fatalf("unexpected hour duration: %s", got)
+	}
+	if got := formatDuration(1500*time.Millisecond, "5s"); got != "1.5s" {
+		t.Fatalf("unexpected fractional duration: %s", got)
+	}
+	if got := DefaultConfigPath(); !strings.HasSuffix(got, filepath.Join(".config", "zpan", "config.yaml")) {
+		t.Fatalf("unexpected default config path: %s", got)
+	}
+}
+
+func TestWriteRuntimeBlocksWhenConfigured(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := Config{
+		ServerURL:             "https://zpan.space",
+		Engine:                "qbittorrent",
+		DownloadDir:           "/downloads",
+		StateDir:              "/state",
+		PollInterval:          time.Second,
+		MaxConcurrentTasks:    1,
+		SeedDuration:          time.Minute,
+		SeedMaxConcurrent:     1,
+		Aria2Configured:       true,
+		Aria2Secret:           "secret",
+		QBittorrentConfigured: true,
+		QBittorrentUser:       "admin",
+		QBittorrentPass:       "password",
+	}
+	if err := WriteConfig(path, cfg, "token"); err != nil {
+		t.Fatal(err)
+	}
+	text := readConfigFile(t, path)
+	if !hasConfigLine(text, "  aria2:") || !strings.Contains(text, `    secret: "secret"`) {
+		t.Fatalf("expected aria2 runtime block, got:\n%s", text)
+	}
+	if !hasConfigLine(text, "  qbittorrent:") ||
+		!strings.Contains(text, `    username: "admin"`) ||
+		!strings.Contains(text, `    password: "password"`) {
+		t.Fatalf("expected qbittorrent runtime block, got:\n%s", text)
+	}
+}
+
+func readConfigFile(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
 }
 
 func hasConfigLine(text string, line string) bool {

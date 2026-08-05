@@ -1,6 +1,5 @@
 import { createFileRoute, Outlet } from '@tanstack/react-router'
-import { ShareLayout } from '@/components/share/share-layout'
-import { ShareLayoutProvider, useShareLayoutState } from '@/components/share/share-layout-state'
+import { PublicLayout } from '@/components/layout/public-layout'
 
 export const Route = createFileRoute('/s')({
   component: ShareRouteLayout,
@@ -8,18 +7,8 @@ export const Route = createFileRoute('/s')({
 
 function ShareRouteLayout() {
   return (
-    <ShareLayoutProvider>
-      <ShareRouteFrame />
-    </ShareLayoutProvider>
-  )
-}
-
-function ShareRouteFrame() {
-  const { layout } = useShareLayoutState()
-
-  return (
-    <ShareLayout title={layout.title} subtitle={layout.subtitle} meta={layout.meta}>
+    <PublicLayout>
       <Outlet />
-    </ShareLayout>
+    </PublicLayout>
   )
 }

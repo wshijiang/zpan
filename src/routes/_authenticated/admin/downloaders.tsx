@@ -1,11 +1,13 @@
 import type { Downloader } from '@shared/types'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
-import { Activity, Pencil, Settings2, Trash2 } from 'lucide-react'
+import { Activity, Settings2, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { AdminFormDrawer, AdminFormField, AdminFormLabel } from '@/components/admin/admin-form-drawer'
 import { AdminPageHeader } from '@/components/admin/admin-page-header'
+import { ProBadge } from '@/components/ProBadge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -17,12 +19,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useEntitlement } from '@/hooks/useEntitlement'
-import { deleteDownloader, listDownloaders, updateDownloader } from '@/lib/api'
+import { deleteDownloader, listDownloaders, updateDownloader, updateDownloaderCreditBilling } from '@/lib/api'
 
 export const Route = createFileRoute('/_authenticated/admin/downloaders')({
   component: AdminDownloadersPage,
@@ -38,28 +39,24 @@ type CreditBillingForm = {
   unit: CreditUnit
   credits: string
 }
+type DownloaderSettingsForm = CreditBillingForm & {
+  name: string
+  downloaderEnabled: boolean
+}
 
-function AdminDownloadersPage() {
+export function AdminDownloadersPage() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const { hasFeature } = useEntitlement()
   const hasTrafficBilling = hasFeature('quota_store')
   const [deleteTarget, setDeleteTarget] = useState<Downloader | null>(null)
-  const [renameTarget, setRenameTarget] = useState<Downloader | null>(null)
-  const [renameValue, setRenameValue] = useState('')
-  const [billingTarget, setBillingTarget] = useState<Downloader | null>(null)
-  const [billingForm, setBillingForm] = useState<CreditBillingForm>(emptyBillingForm())
+  const [settingsTarget, setSettingsTarget] = useState<Downloader | null>(null)
+  const [settingsForm, setSettingsForm] = useState<DownloaderSettingsForm>(emptySettingsForm())
 
   const query = useQuery({
     queryKey: QUERY_KEY,
     queryFn: listDownloaders,
     refetchInterval: 5000,
-  })
-
-  const toggleMutation = useMutation({
-    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => updateDownloader(id, { enabled }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
-    onError: (err) => toast.error(err.message),
   })
 
   const deleteMutation = useMutation({
@@ -72,40 +69,25 @@ function AdminDownloadersPage() {
     onError: (err) => toast.error(err.message),
   })
 
-  const renameMutation = useMutation({
-    mutationFn: ({ downloader, name }: { downloader: Downloader; name: string }) =>
-      updateDownloader(downloader.id, { name: name.trim() }),
-    onSuccess: () => {
-      setRenameTarget(null)
-      setRenameValue('')
-      queryClient.invalidateQueries({ queryKey: QUERY_KEY })
-      toast.success(t('admin.downloaders.renameSuccess'))
+  const settingsMutation = useMutation({
+    mutationFn: async ({ downloader, form }: { downloader: Downloader; form: DownloaderSettingsForm }) => {
+      await updateDownloader(downloader.id, { name: form.name.trim(), enabled: form.downloaderEnabled })
+      if (hasTrafficBilling) {
+        await updateDownloaderCreditBilling(downloader.id, billingPayload(form))
+      }
     },
-    onError: (err) => toast.error(err.message),
-  })
-
-  const billingMutation = useMutation({
-    mutationFn: ({ downloader, form }: { downloader: Downloader; form: CreditBillingForm }) =>
-      updateDownloader(downloader.id, billingPayload(hasTrafficBilling ? form : { ...form, enabled: false })),
     onSuccess: () => {
-      setBillingTarget(null)
+      setSettingsTarget(null)
       queryClient.invalidateQueries({ queryKey: QUERY_KEY })
-      toast.success(t('admin.downloaders.billingSaveSuccess'))
+      toast.success(t('admin.downloaders.settingsSaveSuccess'))
     },
     onError: (err) => toast.error(err.message),
   })
 
   const downloaders = query.data?.items ?? []
-  const openRenameDialog = (downloader: Downloader) => {
-    setRenameTarget(downloader)
-    setRenameValue(downloader.name)
-  }
-  const openBillingSettings = (downloader: Downloader) => {
-    setBillingTarget(downloader)
-    setBillingForm({
-      ...billingFormFromDownloader(downloader),
-      enabled: hasTrafficBilling && downloader.remoteDownloadCreditBillingEnabled,
-    })
+  const openSettings = (downloader: Downloader) => {
+    setSettingsTarget(downloader)
+    setSettingsForm(settingsFormFromDownloader(downloader))
   }
 
   return (
@@ -138,9 +120,7 @@ function AdminDownloadersPage() {
                 key={downloader.id}
                 downloader={downloader}
                 hasTrafficBilling={hasTrafficBilling}
-                onToggle={(enabled) => toggleMutation.mutate({ id: downloader.id, enabled })}
-                onRename={() => openRenameDialog(downloader)}
-                onConfigureBilling={() => openBillingSettings(downloader)}
+                onSettings={() => openSettings(downloader)}
                 onDelete={() => setDeleteTarget(downloader)}
               />
             ))}
@@ -154,29 +134,15 @@ function AdminDownloadersPage() {
         onOpenChange={(open) => !open && setDeleteTarget(null)}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
       />
-      <RenameDownloaderDialog
-        downloader={renameTarget}
-        value={renameValue}
-        open={renameTarget !== null}
-        pending={renameMutation.isPending}
-        onValueChange={setRenameValue}
-        onOpenChange={(open) => {
-          if (!open) {
-            setRenameTarget(null)
-            setRenameValue('')
-          }
-        }}
-        onConfirm={() => renameTarget && renameMutation.mutate({ downloader: renameTarget, name: renameValue })}
-      />
-      <CreditBillingDialog
-        downloader={billingTarget}
-        form={billingForm}
-        open={billingTarget !== null}
-        pending={billingMutation.isPending}
+      <DownloaderSettingsDrawer
+        downloader={settingsTarget}
+        form={settingsForm}
+        open={settingsTarget !== null}
+        pending={settingsMutation.isPending}
         hasTrafficBilling={hasTrafficBilling}
-        onFormChange={setBillingForm}
-        onOpenChange={(open) => !open && setBillingTarget(null)}
-        onConfirm={() => billingTarget && billingMutation.mutate({ downloader: billingTarget, form: billingForm })}
+        onFormChange={setSettingsForm}
+        onOpenChange={(open) => !open && setSettingsTarget(null)}
+        onConfirm={() => settingsTarget && settingsMutation.mutate({ downloader: settingsTarget, form: settingsForm })}
       />
     </div>
   )
@@ -185,16 +151,12 @@ function AdminDownloadersPage() {
 function DownloaderRow({
   downloader,
   hasTrafficBilling,
-  onToggle,
-  onRename,
-  onConfigureBilling,
+  onSettings,
   onDelete,
 }: {
   downloader: Downloader
   hasTrafficBilling: boolean
-  onToggle: (enabled: boolean) => void
-  onRename: () => void
-  onConfigureBilling: () => void
+  onSettings: () => void
   onDelete: () => void
 }) {
   const { t } = useTranslation()
@@ -235,16 +197,12 @@ function DownloaderRow({
       </TableCell>
       <TableCell className="text-right">
         <div className="flex items-center justify-end gap-2">
-          <Switch size="sm" checked={downloader.enabled} onCheckedChange={onToggle} />
-          <Button type="button" variant="ghost" size="icon" onClick={onRename} aria-label={t('common.edit')}>
-            <Pencil className="size-4" />
-          </Button>
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            onClick={onConfigureBilling}
-            aria-label={t('admin.downloaders.configureBilling')}
+            onClick={onSettings}
+            aria-label={t('admin.downloaders.settingsAction')}
           >
             <Settings2 className="size-4" />
           </Button>
@@ -263,66 +221,7 @@ function DownloaderRow({
   )
 }
 
-function RenameDownloaderDialog({
-  downloader,
-  value,
-  open,
-  pending,
-  onValueChange,
-  onOpenChange,
-  onConfirm,
-}: {
-  downloader: Downloader | null
-  value: string
-  open: boolean
-  pending: boolean
-  onValueChange: (value: string) => void
-  onOpenChange: (open: boolean) => void
-  onConfirm: () => void
-}) {
-  const { t } = useTranslation()
-  const valid = value.trim().length >= 1 && value.trim().length <= 120
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t('admin.downloaders.renameTitle')}</DialogTitle>
-          <DialogDescription>
-            {t('admin.downloaders.renameDescription', { hostname: downloader?.hostname ?? '' })}
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          className="space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (valid) onConfirm()
-          }}
-        >
-          <div className="space-y-2">
-            <Label htmlFor="downloaderDisplayName">{t('admin.downloaders.displayName')}</Label>
-            <Input
-              id="downloaderDisplayName"
-              maxLength={120}
-              value={value}
-              onChange={(event) => onValueChange(event.target.value)}
-              autoFocus
-            />
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={pending || !valid}>
-              {t('common.save')}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function CreditBillingDialog({
+function DownloaderSettingsDrawer({
   downloader,
   form,
   open,
@@ -333,94 +232,139 @@ function CreditBillingDialog({
   onConfirm,
 }: {
   downloader: Downloader | null
-  form: CreditBillingForm
+  form: DownloaderSettingsForm
   open: boolean
   pending: boolean
   hasTrafficBilling: boolean
-  onFormChange: (form: CreditBillingForm) => void
+  onFormChange: (form: DownloaderSettingsForm) => void
   onOpenChange: (open: boolean) => void
   onConfirm: () => void
 }) {
   const { t } = useTranslation()
-  const valid = Number(form.unitValue) >= 1 && Number(form.credits) >= 1
+  const validName = form.name.trim().length >= 1 && form.name.trim().length <= 120
+  const validBilling = Number(form.unitValue) >= 1 && Number(form.credits) >= 1
+  const canSave = validName && (!hasTrafficBilling || !form.enabled || validBilling)
+  const billingFieldsDisabled = !hasTrafficBilling || !form.enabled
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t('admin.downloaders.billingTitle')}</DialogTitle>
-          <DialogDescription>
-            {t('admin.downloaders.billingDescription', { name: downloader?.name ?? '' })}
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          className="space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (valid) onConfirm()
-          }}
-        >
-          <div className="flex items-center justify-between gap-3 rounded-md border p-3">
-            <div>
-              <Label htmlFor="remoteDownloadCreditBillingEnabled">{t('admin.downloaders.billingEnabled')}</Label>
-              <p className="text-xs text-muted-foreground">{t('admin.downloaders.billingEnabledHint')}</p>
-            </div>
-            <Switch
-              id="remoteDownloadCreditBillingEnabled"
-              disabled={!hasTrafficBilling}
-              checked={form.enabled}
-              onCheckedChange={(enabled) => onFormChange({ ...form, enabled: hasTrafficBilling && enabled })}
-            />
+    <AdminFormDrawer
+      open={open}
+      onOpenChange={onOpenChange}
+      onOpenAutoFocus={(event) => event.preventDefault()}
+      title={t('admin.downloaders.settingsTitle')}
+      description={t('admin.downloaders.settingsDescription', { hostname: downloader?.hostname ?? '' })}
+      bodyClassName="space-y-4"
+      formProps={{
+        onSubmit: (event) => {
+          event.preventDefault()
+          if (canSave) onConfirm()
+        },
+      }}
+      footer={
+        <>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit" disabled={pending || !canSave}>
+            {pending ? t('common.loading') : t('common.save')}
+          </Button>
+        </>
+      }
+    >
+      <section className="space-y-3">
+        <div className="flex items-start justify-between gap-4 rounded-md border bg-background p-3">
+          <div className="min-w-0">
+            <AdminFormLabel htmlFor="downloaderEnabled" help={t('admin.downloaders.enabledHint')}>
+              {t('admin.downloaders.enabled')}
+            </AdminFormLabel>
           </div>
-          {!hasTrafficBilling && (
-            <p className="text-xs text-muted-foreground">{t('admin.downloaders.billingBusinessOnly')}</p>
-          )}
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="remoteDownloadCreditUnitValue">{t('admin.downloaders.billingUnit')}</Label>
-              <div className="flex items-center gap-2">
-                <Input
-                  id="remoteDownloadCreditUnitValue"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={form.unitValue}
-                  onChange={(event) => onFormChange({ ...form, unitValue: event.target.value })}
-                />
-                <Select value={form.unit} onValueChange={(unit) => onFormChange({ ...form, unit: unit as CreditUnit })}>
-                  <SelectTrigger className="w-24">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="MB">MB</SelectItem>
-                    <SelectItem value="GB">GB</SelectItem>
-                    <SelectItem value="TB">TB</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="remoteDownloadCreditPerUnit">{t('admin.downloaders.billingCredits')}</Label>
-              <Input
-                id="remoteDownloadCreditPerUnit"
-                type="number"
+          <Switch
+            id="downloaderEnabled"
+            className="mt-0.5"
+            checked={form.downloaderEnabled}
+            onCheckedChange={(downloaderEnabled) => onFormChange({ ...form, downloaderEnabled })}
+          />
+        </div>
+
+        <AdminFormField
+          id="downloaderDisplayName"
+          label={t('admin.downloaders.displayName')}
+          required
+          help={t('admin.downloaders.displayNameHint')}
+        >
+          <Input
+            maxLength={120}
+            value={form.name}
+            placeholder={t('admin.downloaders.displayNamePlaceholder')}
+            onChange={(event) => onFormChange({ ...form, name: event.target.value })}
+          />
+        </AdminFormField>
+      </section>
+
+      <section className="space-y-3 border-t pt-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <AdminFormLabel
+              htmlFor="remoteDownloadCreditBillingEnabled"
+              help={t('admin.downloaders.billingEnabledHint')}
+            >
+              <span>{t('admin.downloaders.billingEnabled')}</span>
+              <ProBadge className="px-1.5 py-0 text-[10px] leading-4" />
+            </AdminFormLabel>
+            {!hasTrafficBilling && (
+              <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                {t('admin.downloaders.billingBusinessOnly')}
+              </p>
+            )}
+          </div>
+          <Switch
+            id="remoteDownloadCreditBillingEnabled"
+            className="mt-0.5"
+            disabled={!hasTrafficBilling}
+            checked={form.enabled}
+            onCheckedChange={(enabled) => onFormChange({ ...form, enabled: hasTrafficBilling && enabled })}
+          />
+        </div>
+
+        <div className="space-y-2.5">
+          <div className="space-y-1">
+            <AdminFormLabel htmlFor="remoteDownloadCreditUnitValue" required={hasTrafficBilling && form.enabled}>
+              {t('admin.downloaders.billingUnit')}
+            </AdminFormLabel>
+            <div className="flex items-center gap-2">
+              <DataAmountInput
+                id="remoteDownloadCreditUnitValue"
                 min={1}
-                step={1}
-                value={form.credits}
-                onChange={(event) => onFormChange({ ...form, credits: event.target.value })}
+                placeholder={t('admin.downloaders.billingUnitPlaceholder')}
+                value={form.unitValue}
+                unit={form.unit}
+                disabled={billingFieldsDisabled}
+                required={hasTrafficBilling && form.enabled}
+                onValueChange={(unitValue) => onFormChange({ ...form, unitValue })}
+                onUnitChange={(unit) => onFormChange({ ...form, unit })}
               />
             </div>
           </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={pending || !valid}>
-              {t('common.save')}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+          <div className="space-y-1">
+            <AdminFormLabel htmlFor="remoteDownloadCreditPerUnit" required={hasTrafficBilling && form.enabled}>
+              {t('admin.downloaders.billingCredits')}
+            </AdminFormLabel>
+            <Input
+              id="remoteDownloadCreditPerUnit"
+              type="number"
+              min={1}
+              step={1}
+              value={form.credits}
+              placeholder={t('admin.downloaders.billingCreditsPlaceholder')}
+              disabled={billingFieldsDisabled}
+              aria-required={hasTrafficBilling && form.enabled ? true : undefined}
+              onChange={(event) => onFormChange({ ...form, credits: event.target.value })}
+              className="w-48"
+            />
+          </div>
+        </div>
+      </section>
+    </AdminFormDrawer>
   )
 }
 
@@ -472,13 +416,15 @@ function formatBytes(bytes: number) {
   return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
 }
 
-function emptyBillingForm(): CreditBillingForm {
-  return { enabled: false, unitValue: '100', unit: 'MB', credits: '1' }
+function emptySettingsForm(): DownloaderSettingsForm {
+  return { name: '', downloaderEnabled: true, enabled: false, unitValue: '100', unit: 'MB', credits: '1' }
 }
 
-function billingFormFromDownloader(downloader: Downloader): CreditBillingForm {
+function settingsFormFromDownloader(downloader: Downloader): DownloaderSettingsForm {
   const unit = bytesToCreditUnit(downloader.remoteDownloadCreditUnitBytes)
   return {
+    name: downloader.name,
+    downloaderEnabled: downloader.enabled,
     enabled: downloader.remoteDownloadCreditBillingEnabled,
     unitValue: String(Math.max(1, downloader.remoteDownloadCreditUnitBytes / CREDIT_UNITS[unit])),
     unit,
@@ -488,9 +434,9 @@ function billingFormFromDownloader(downloader: Downloader): CreditBillingForm {
 
 function billingPayload(form: CreditBillingForm) {
   return {
-    remoteDownloadCreditBillingEnabled: form.enabled,
-    remoteDownloadCreditUnitBytes: Math.max(1, Math.floor(Number(form.unitValue))) * CREDIT_UNITS[form.unit],
-    remoteDownloadCreditPerUnit: Math.max(1, Math.floor(Number(form.credits))),
+    enabled: form.enabled,
+    unitBytes: Math.max(1, Math.floor(Number(form.unitValue))) * CREDIT_UNITS[form.unit],
+    creditsPerUnit: Math.max(1, Math.floor(Number(form.credits))),
   }
 }
 
@@ -498,4 +444,53 @@ function bytesToCreditUnit(bytes: number): CreditUnit {
   if (bytes >= CREDIT_UNITS.TB && bytes % CREDIT_UNITS.TB === 0) return 'TB'
   if (bytes >= CREDIT_UNITS.GB && bytes % CREDIT_UNITS.GB === 0) return 'GB'
   return 'MB'
+}
+
+function DataAmountInput({
+  id,
+  value,
+  unit,
+  min,
+  placeholder,
+  disabled,
+  required,
+  onValueChange,
+  onUnitChange,
+}: {
+  id: string
+  value: string
+  unit: CreditUnit
+  min: number
+  placeholder?: string
+  disabled?: boolean
+  required?: boolean
+  onValueChange: (value: string) => void
+  onUnitChange: (unit: CreditUnit) => void
+}) {
+  return (
+    <div className="flex h-9 w-48 items-center overflow-hidden rounded-md border border-input bg-transparent shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 has-disabled:pointer-events-none has-disabled:opacity-50 dark:bg-input/30">
+      <Input
+        id={id}
+        type="number"
+        min={min}
+        step={1}
+        value={value}
+        placeholder={placeholder}
+        disabled={disabled}
+        aria-required={required ? true : undefined}
+        onChange={(event) => onValueChange(event.target.value)}
+        className="h-8 flex-1 rounded-none border-0 bg-transparent shadow-none focus-visible:ring-0"
+      />
+      <Select value={unit} disabled={disabled} onValueChange={(nextUnit) => onUnitChange(nextUnit as CreditUnit)}>
+        <SelectTrigger className="h-8 w-20 rounded-none border-0 border-l bg-transparent px-2 shadow-none focus-visible:ring-0">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="MB">MB</SelectItem>
+          <SelectItem value="GB">GB</SelectItem>
+          <SelectItem value="TB">TB</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  )
 }

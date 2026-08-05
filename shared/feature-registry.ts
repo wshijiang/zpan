@@ -75,6 +75,14 @@ export const FEATURE_REGISTRY = [
     business: true,
   },
   {
+    i18nKey: 'features.imageCustomDomains',
+    category: 'advanced',
+    community: false,
+    pro: true,
+    business: true,
+    gateKey: 'image_custom_domains',
+  },
+  {
     i18nKey: 'features.socialLoginOidc',
     category: 'core',
     community: { i18nKey: 'features.socialLoginOidc.limit', params: { count: FREE_SOCIAL_LOGIN_LIMIT } },
@@ -183,9 +191,9 @@ export const FEATURE_REGISTRY = [
     i18nKey: 'features.analytics',
     category: 'advanced',
     community: false,
-    pro: false,
+    pro: true,
     business: true,
-    comingSoon: true,
+    gateKey: 'analytics',
   },
 ] as const satisfies readonly FeatureDefinition[]
 

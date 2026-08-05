@@ -73,7 +73,7 @@ Set these in your fork's GitHub repository under **Settings → Secrets and vari
 
 5. **Add the required secrets** to your fork (see table above). `BETTER_AUTH_URL` and `BETTER_AUTH_SECRET` are both optional — the workflow handles them automatically on first deploy.
 
-6. **Push to `master`** — the `deploy-cloud-run.yml` workflow runs automatically. Cloud Build builds the image, Turso migrations run, `service.yaml` drives the Cloud Run deploy, and `BETTER_AUTH_URL` is auto-wired from the assigned service URL.
+6. **Push to `main`** — the `deploy-cloud-run.yml` workflow runs automatically. Cloud Build builds the image, Turso migrations run, `service.yaml` drives the Cloud Run deploy, and `BETTER_AUTH_URL` is auto-wired from the assigned service URL.
 
 ## Workflow Steps
 
@@ -166,8 +166,9 @@ ZPan refreshes its entitlement certificate every 6 hours. On Cloud Run there is 
    ```sh
    gcloud scheduler jobs create http zpan-license-refresh \
      --schedule="0 */6 * * *" \
-     --uri="https://<your-cloud-run-url>/api/licensing/refresh-cron?secret=<REFRESH_CRON_SECRET>" \
+     --uri="https://<your-cloud-run-url>/api/internal/licensing/refresh-runs" \
      --http-method=POST \
+     --headers="Authorization=Bearer <your-secret>" \
      --location=<your-region>
    ```
 
@@ -175,9 +176,10 @@ ZPan refreshes its entitlement certificate every 6 hours. On Cloud Run there is 
    ```sh
    gcloud scheduler jobs create http zpan-traffic-sync \
      --schedule="*/10 * * * *" \
-     --uri="https://<your-cloud-run-url>/api/licensing/traffic-sync-runs?secret=<REFRESH_CRON_SECRET>" \
+     --uri="https://<your-cloud-run-url>/api/internal/traffic-sync-runs" \
      --http-method=POST \
+     --headers="Authorization=Bearer <your-secret>" \
      --location=<your-region>
    ```
 
-If `REFRESH_CRON_SECRET` is not set, the endpoint returns `401` for all requests.
+Send `Authorization: Bearer <REFRESH_CRON_SECRET>` with every scheduler request. If `REFRESH_CRON_SECRET` is not set, the endpoint returns `401` for all requests.

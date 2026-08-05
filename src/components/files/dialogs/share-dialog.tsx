@@ -2,7 +2,7 @@ import { DirType } from '@shared/constants'
 import type { CreateShareRequest } from '@shared/schemas'
 import type { StorageObject } from '@shared/types'
 import { useMutation } from '@tanstack/react-query'
-import { CheckCircle2, Copy, File, Folder, KeyRound, Share2, TriangleAlert, X } from 'lucide-react'
+import { CheckCircle2, Copy, File, Folder, KeyRound, Lock, Share2, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -34,7 +34,8 @@ export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export function genPassword(): string {
   const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
-  return Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+  const values = crypto.getRandomValues(new Uint32Array(12))
+  return Array.from(values, (v) => chars[v % chars.length]).join('')
 }
 
 export function addDays(n: number): string {
@@ -78,6 +79,7 @@ export function ShareDialog({ open, item, onOpenChange, onViewShares }: ShareDia
   const [customExpires, setCustomExpires] = useState('')
   const [limitOption, setLimitOption] = useState('unlimited')
   const [customLimit, setCustomLimit] = useState('')
+  const [privateShare, setPrivateShare] = useState(false)
   const [result, setResult] = useState<CreateShareResult | null>(null)
 
   useEffect(() => {
@@ -91,6 +93,7 @@ export function ShareDialog({ open, item, onOpenChange, onViewShares }: ShareDia
     setCustomExpires('')
     setLimitOption('unlimited')
     setCustomLimit('')
+    setPrivateShare(false)
     setResult(null)
   }, [open])
 
@@ -144,6 +147,7 @@ export function ShareDialog({ open, item, onOpenChange, onViewShares }: ShareDia
     if (isTargetedMode(mode) && chips.length > 0) {
       body.recipients = chips.filter((c) => c.valid).map((c) => ({ recipientEmail: c.value }))
     }
+    if (mode === 'page' && privateShare) body.private = true
     mutation.mutate(body)
   }
 
@@ -182,6 +186,7 @@ export function ShareDialog({ open, item, onOpenChange, onViewShares }: ShareDia
                 isFolder={isFolder}
                 onChange={(next) => {
                   setMode(next)
+                  setPrivateShare(false)
                   setPasswordEnabled(false)
                   setPassword('')
                   if (!isTargetedMode(next)) {
@@ -211,6 +216,23 @@ export function ShareDialog({ open, item, onOpenChange, onViewShares }: ShareDia
               )}
 
               {mode === 'page' && <PasswordField enabled={passwordEnabled} onToggle={handlePasswordToggle} />}
+              {mode === 'page' && (
+                <div className="flex min-h-11 items-start justify-between gap-4 rounded-md border bg-background p-3">
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Lock className="h-4 w-4 text-muted-foreground" />
+                      <Label htmlFor="private-share">{t('share.private')}</Label>
+                    </div>
+                    <p className="text-xs leading-5 text-muted-foreground">{t('share.privateHint')}</p>
+                  </div>
+                  <Switch
+                    id="private-share"
+                    className="mt-0.5"
+                    checked={privateShare}
+                    onCheckedChange={setPrivateShare}
+                  />
+                </div>
+              )}
 
               <ExpiresField
                 option={expiresOption}
@@ -366,15 +388,15 @@ function RecipientsField({
 function PasswordField({ enabled, onToggle }: { enabled: boolean; onToggle: (v: boolean) => void }) {
   const { t } = useTranslation()
   return (
-    <div className="space-y-1.5 rounded-md border bg-muted/30 p-3">
-      <div className="flex items-center justify-between">
+    <div className="flex min-h-11 items-start justify-between gap-4 rounded-md border bg-background p-3">
+      <div className="min-w-0 space-y-1">
         <div className="flex items-center gap-2">
           <KeyRound className="h-4 w-4 text-muted-foreground" />
           <Label htmlFor="share-pwd">{t('share.password')}</Label>
         </div>
-        <Switch id="share-pwd" checked={enabled} onCheckedChange={onToggle} />
+        <p className="text-xs leading-5 text-muted-foreground">{t('share.passwordHint')}</p>
       </div>
-      <p className="text-xs text-muted-foreground">{t('share.passwordHint')}</p>
+      <Switch id="share-pwd" className="mt-0.5" checked={enabled} onCheckedChange={onToggle} />
     </div>
   )
 }

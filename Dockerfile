@@ -7,11 +7,21 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml ./
+COPY patches ./patches
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     corepack enable \
  && pnpm install --frozen-lockfile
 
-COPY . .
+# Copy only what the JS build (vite + tsup) and the final server image consume,
+# so a cmd/-only change (the Go downloader) doesn't bust this layer and force a
+# full server rebuild. Keep in sync with the build inputs + the final-stage COPYs.
+COPY index.html vite.config.ts tsconfig.json ./
+COPY src ./src
+COPY server ./server
+COPY shared ./shared
+COPY public ./public
+COPY migrations ./migrations
+COPY scripts ./scripts
 # .git is excluded from the build context, so git describe cannot run here.
 # The release workflow passes the tag via APP_VERSION and the commit SHA via
 # APP_COMMIT; resolveAppVersion/resolveAppCommit read them.
@@ -22,12 +32,18 @@ ENV ZPAN_APP_COMMIT=${APP_COMMIT}
 RUN pnpm build:node \
  && pnpm prune --prod --ignore-scripts
 
-FROM golang:1.25 AS cli-builder
+# Build on the native build platform and cross-compile to the target arch, so
+# the arm64 image doesn't go through slow QEMU emulation. CGO is off, so Go
+# cross-compiles cleanly. Build/mod caches make incremental rebuilds fast.
+FROM --platform=$BUILDPLATFORM golang:1.25 AS cli-builder
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /app/cmd
 COPY cmd/go.mod cmd/go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/zpan ./zpan
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/zpan .
 
 FROM debian:bookworm-slim AS geoip-db
 ARG GEOIP_DB_MONTH=2026-06

@@ -1,11 +1,13 @@
 import { createFileRoute, Outlet, redirect, useMatchRoute } from '@tanstack/react-router'
 import { SiteAnnouncements } from '@/components/announcements/site-announcements'
+import { SessionGateError, SessionGatePending } from '@/components/auth/session-gate'
 import { AppSidebar } from '@/components/layout/app-sidebar'
 import { GlobalSearchBar } from '@/components/layout/global-search-bar'
 import { MusicPlayerButton } from '@/components/music/music-player-button'
 import { NotificationBell } from '@/components/notifications/notification-bell'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { UploadStatusButton } from '@/components/upload/upload-queue'
+import { useServerEvents } from '@/hooks/useServerEvents'
 import { getSession } from '@/lib/api'
 
 export const Route = createFileRoute('/_authenticated')({
@@ -17,10 +19,13 @@ export const Route = createFileRoute('/_authenticated')({
     }
     return { user: data.user }
   },
+  pendingComponent: SessionGatePending,
+  errorComponent: SessionGateError,
   component: AuthenticatedLayout,
 })
 
 function AuthenticatedLayout() {
+  useServerEvents()
   const matchRoute = useMatchRoute()
   const isAdmin = matchRoute({ to: '/admin', fuzzy: true })
 

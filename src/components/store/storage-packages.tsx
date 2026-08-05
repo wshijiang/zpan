@@ -1,34 +1,38 @@
-import type { CloudProduct } from '@shared/types'
+import type { CloudProduct, CurrentStoragePlan } from '@shared/types'
 import { BadgeCent, HardDrive, PlusCircle } from 'lucide-react'
 import type * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cloudProductIncludedCredits, cloudProductStorageBytes } from '@/lib/cloud-product'
-import { formatSize } from '@/lib/format'
+import { formatCurrency, formatSize } from '@/lib/format'
 
 export function StoragePackages({
   packages,
   disabled,
   currentPlan,
+  showHeader = true,
   onCheckout,
   onManagePlan,
 }: {
   packages: CloudProduct[]
   disabled: boolean
-  currentPlan?: { packageId: string | null; storageBytes: number } | null
+  currentPlan?: CurrentStoragePlan | null
+  showHeader?: boolean
   onCheckout: (packageId: string, priceId: string) => void
   onManagePlan?: () => void
 }) {
   const { t, i18n } = useTranslation()
   const language = i18n.resolvedLanguage ?? 'en'
   return (
-    <section className="space-y-4">
-      <div>
-        <h3 className="text-lg font-semibold">{t('storage.availablePlansTitle')}</h3>
-        <p className="text-sm text-muted-foreground">{t('storage.availableProductsDescription')}</p>
-      </div>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+    <section className="min-w-0 space-y-4">
+      {showHeader && (
+        <div>
+          <h3 className="text-lg font-semibold">{t('storage.availablePlansTitle')}</h3>
+          <p className="text-sm text-muted-foreground">{t('storage.availableProductsDescription')}</p>
+        </div>
+      )}
+      <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {packages.map((pkg) => (
           <PackageCard
             key={pkg.id}
@@ -111,7 +115,7 @@ function PackageCard({
 }: {
   pkg: CloudProduct
   disabled: boolean
-  currentPlan?: { packageId: string | null; storageBytes: number } | null
+  currentPlan?: CurrentStoragePlan | null
   language: string
   onCheckout: (packageId: string, priceId: string) => void
   onManagePlan?: () => void
@@ -124,7 +128,7 @@ function PackageCard({
   const storageBytes = cloudProductStorageBytes(pkg)
   const includedCredits = cloudProductIncludedCredits(pkg)
   const isCurrent = currentPlan?.packageId === pkg.id
-  const hasPlan = Boolean(currentPlan)
+  const hasPlan = Boolean(currentPlan?.subscription)
   const isHigherPlan = hasPlan && storageBytes > (currentPlan?.storageBytes ?? 0)
   return (
     <ProductCardShell
@@ -242,16 +246,12 @@ function selectPlanPrices(prices: CloudProduct['prices']) {
   }
 }
 
-function formatMoney(amount: number, currency: string, language: string) {
-  return new Intl.NumberFormat(language, { style: 'currency', currency: currency.toUpperCase() }).format(amount / 100)
-}
-
 function formatPlanPrice(
   price: CloudProduct['prices'][number],
   language: string,
   t: ReturnType<typeof useTranslation>['t'],
 ) {
-  const amount = formatMoney(price.amount, price.currency, language)
+  const amount = formatCurrency(price.amount, price.currency, language)
   if (price.recurring?.interval === 'month' && price.recurring.intervalCount === 1)
     return t('storage.priceMonthly', { amount })
   if (price.recurring?.interval === 'year' && price.recurring.intervalCount === 1)

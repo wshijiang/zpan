@@ -2,14 +2,24 @@ import { createFileRoute, Link, redirect } from '@tanstack/react-router'
 import { Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { SessionGateError, SessionGatePending } from '@/components/auth/session-gate'
 import { Button } from '@/components/ui/button'
-import { continueCloudOrderPayment, createCloudBillingPortalSession, createCloudCheckout, getSession } from '@/lib/api'
+import {
+  ApiError,
+  cancelCloudOrder,
+  continueCloudOrderPayment,
+  createCloudBillingPortalSession,
+  createCloudCheckout,
+  getSession,
+  listCloudOrders,
+} from '@/lib/api'
 import { redirectExternal } from '@/lib/browser-navigation'
 
 type CheckoutSearch = {
   action: 'checkout' | 'payment' | 'portal' | 'invalid'
   packageId?: string
   priceId?: string
+  promotionCode?: string
   orderId?: string
 }
 
@@ -22,6 +32,8 @@ export const Route = createFileRoute('/store/checkout')({
       throw redirect({ to: '/sign-in', search: { redirect: redirectUrl } as never })
     }
   },
+  pendingComponent: SessionGatePending,
+  errorComponent: SessionGateError,
   component: StorageCheckoutPage,
 })
 
@@ -72,6 +84,7 @@ function normalizeCheckoutSearch(search: Record<string, unknown>): CheckoutSearc
       action,
       packageId: stringValue(search.packageId),
       priceId: stringValue(search.priceId),
+      promotionCode: stringValue(search.promotionCode),
     }
   }
   if (action === 'payment') return { action, orderId: stringValue(search.orderId) }
@@ -82,8 +95,25 @@ function normalizeCheckoutSearch(search: Record<string, unknown>): CheckoutSearc
 async function createCheckoutSession(search: CheckoutSearch) {
   if (search.action === 'checkout') {
     if (!search.packageId || !search.priceId) throw new Error('invalid_checkout_request')
-    const result = await createCloudCheckout(search.packageId, search.priceId)
-    return result.url
+    try {
+      const result = await createCloudCheckout(search.packageId, search.priceId, search.promotionCode)
+      return result.url
+    } catch (err) {
+      if (err instanceof ApiError && err.reason === 'WORKSPACE_PLAN_EXISTS') {
+        const ordersRes = await listCloudOrders()
+        const pendingPlanOrder = ordersRes.items.find(
+          (order) =>
+            order.status === 'pending' &&
+            order.items?.some((item) => item.fulfillmentPayload?.deliverable?.type === 'zpan.plan'),
+        )
+        if (pendingPlanOrder) {
+          await cancelCloudOrder(pendingPlanOrder.id)
+          const result = await createCloudCheckout(search.packageId, search.priceId, search.promotionCode)
+          return result.url
+        }
+      }
+      throw err
+    }
   }
   if (search.action === 'payment') {
     if (!search.orderId) throw new Error('invalid_checkout_request')
